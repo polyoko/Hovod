@@ -76,6 +76,4 @@ RUN mkdir -p /data && chown -R hovod:hovod /data
 
 EXPOSE 3000
 
-VOLUME ["/data"]
-
 ENTRYPOINT ["/entrypoint.sh"]
