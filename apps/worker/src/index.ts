@@ -25,6 +25,7 @@ import {
   createDownloadableMp4,
   extractPosterThumbnail,
   createMasterPlaylist,
+  type EncodedRendition,
 } from './transcoding.js';
 import { isAiConfigured } from './ai/provider-factory.js';
 import { processAi } from './ai/process.js';
@@ -238,6 +239,7 @@ const worker = new Worker(
       const ladder = filterLadder(probe.width, probe.height);
       console.log(`[worker] Ladder: ${ladder.map(p => p.quality).join(', ')}`);
 
+      const encoded: EncodedRendition[] = [];
       for (const profile of ladder) {
         console.log(`[worker] Transcoding ${profile.quality}...`);
         await setStep(`transcoding_${profile.quality}`);
@@ -248,12 +250,21 @@ const worker = new Worker(
         const mp4Path = path.join(outputDir, profile.quality, 'download.mp4');
         const mp4Stat = await stat(mp4Path).catch(() => null);
 
+        // The profile is only an upper bound; record what ffmpeg actually
+        // produced so portrait sources are not published as landscape. A probe
+        // failure falls back to the profile rather than failing the asset.
+        const probed = await ffprobe(mp4Path).catch(() => null);
+        const output = probed !== null && probed.width > 0 && probed.height > 0
+          ? { width: probed.width, height: probed.height }
+          : { width: profile.width, height: profile.height };
+        encoded.push({ profile, ...output });
+
         await db.insert(renditions).values({
           id: randomUUID(),
           assetId,
           quality: profile.quality,
-          width: profile.width,
-          height: profile.height,
+          width: output.width,
+          height: output.height,
           bitrateKbps: profile.bitrateKbps,
           fileSizeBytes: mp4Stat?.size ?? null,
           codec: 'h264',
@@ -268,7 +279,7 @@ const worker = new Worker(
       await extractPosterThumbnail(sourcePath, outputDir, probe.duration);
 
       /* Create master playlist and upload */
-      await createMasterPlaylist(outputDir, ladder);
+      await createMasterPlaylist(outputDir, encoded);
 
       await setStep(PROCESSING_STEP.UPLOADING);
       console.log('[worker] Uploading to S3...');

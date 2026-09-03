@@ -105,13 +105,22 @@ export async function createDownloadableMp4(
   ]);
 }
 
+/** A rendition as it was actually encoded. The ladder profile only bounds the
+ * output: `force_original_aspect_ratio=decrease` fits the source inside that
+ * box, so a 9:16 source at the 854x480 rung really comes out 270x480. */
+export interface EncodedRendition {
+  profile: RenditionProfile;
+  width: number;
+  height: number;
+}
+
 export async function createMasterPlaylist(
   outputDir: string,
-  profiles: RenditionProfile[],
+  renditions: EncodedRendition[],
 ): Promise<void> {
   let content = '#EXTM3U\n#EXT-X-VERSION:3\n';
-  for (const profile of profiles) {
-    content += `#EXT-X-STREAM-INF:BANDWIDTH=${profile.bitrateKbps * 1000},RESOLUTION=${profile.width}x${profile.height},CODECS="${profile.codecTag},mp4a.40.2"\n`;
+  for (const { profile, width, height } of renditions) {
+    content += `#EXT-X-STREAM-INF:BANDWIDTH=${profile.bitrateKbps * 1000},RESOLUTION=${width}x${height},CODECS="${profile.codecTag},mp4a.40.2"\n`;
     content += `${profile.quality}/index.m3u8\n`;
   }
   await writeFile(path.join(outputDir, 'master.m3u8'), content, 'utf-8');
