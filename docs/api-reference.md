@@ -12,10 +12,11 @@ All successful responses wrap the payload in a `data` key:
 { "data": { ... } }
 ```
 
-All error responses return an `error` string:
+All error responses return an `error` string. Errors that a client can safely
+handle programmatically also include a stable `code`:
 
 ```json
-{ "error": "Error message" }
+{ "error": "Error message", "code": "STABLE_ERROR_CODE" }
 ```
 
 ## HTTP Status Codes
@@ -221,7 +222,7 @@ curl http://localhost:3002/v1/assets/a1b2c3d4e5f6
 POST /v1/assets/:id/upload-url
 ```
 
-Generates a pre-signed S3 URL (valid for 1 hour) to upload a video file directly to storage. The client performs a `PUT` request to the returned URL with the raw video file as body.
+Generates a pre-signed S3 URL (valid for 1 hour) to upload a video file directly to storage. The client performs a `PUT` request to the returned URL with the raw video file as body. The `Content-Type` on that PUT must match the requested `contentType`.
 
 **Path Parameters**
 
@@ -229,11 +230,19 @@ Generates a pre-signed S3 URL (valid for 1 hour) to upload a video file directly
 |-----------|-------------|
 | `id` | Asset ID |
 
+**Request Body** (optional)
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `contentType` | `string` | No | One of `video/mp4` (default), `video/webm`, `video/quicktime`, `video/x-matroska`, `video/x-msvideo`, `video/mpeg`, or `video/ogg` |
+
 **Example**
 
 ```bash
-# 1. Get the signed URL
-curl -X POST http://localhost:3002/v1/assets/a1b2c3d4e5f6/upload-url
+# 1. Get the signed URL (request body is optional; default is video/mp4)
+curl -X POST http://localhost:3002/v1/assets/a1b2c3d4e5f6/upload-url \
+  -H "Content-Type: application/json" \
+  -d '{"contentType":"video/mp4"}'
 
 # 2. Upload the video file to the signed URL
 curl -X PUT "<uploadUrl>" \
@@ -248,7 +257,8 @@ curl -X PUT "<uploadUrl>" \
   "data": {
     "uploadUrl": "http://localhost:9000/hovod-vod/sources/a1b2c3d4e5f6/input.mp4?X-Amz-Algorithm=...",
     "sourceKey": "sources/a1b2c3d4e5f6/input.mp4",
-    "method": "PUT"
+    "method": "PUT",
+    "expiresIn": 3600
   }
 }
 ```
@@ -258,6 +268,9 @@ curl -X PUT "<uploadUrl>" \
 ```json
 { "error": "Asset not found" }
 ```
+
+`UNSUPPORTED_MEDIA_TYPE` is returned for an unsupported `contentType`; an asset
+that already has a confirmed source returns `409`.
 
 ---
 
@@ -337,16 +350,45 @@ curl -X POST http://localhost:3002/v1/assets/a1b2c3d4e5f6/process
   "data": {
     "assetId": "a1b2c3d4e5f6",
     "jobId": "j1k2l3m4n5o6",
-    "status": "queued"
+    "status": "queued",
+    "accepted": true,
+    "alreadyQueued": false
   }
 }
 ```
 
-**Error** `404`
+The request is idempotent. A second request while the asset is queued or
+processing returns the existing job with `alreadyQueued: true`, rather than
+creating another transcode job. Processing requires an `uploaded` asset.
+
+**Errors**
 
 ```json
 { "error": "Asset not found" }
 ```
+
+| HTTP | Stable code | Meaning |
+|------|-------------|---------|
+| 409 | `UPLOAD_NOT_CONFIRMED` | The asset has no confirmed upload yet |
+| 409 | `ASSET_ALREADY_PROCESSING` | The asset is in an incompatible processing state |
+| 503 | `QUEUE_UNAVAILABLE` | The job was persisted and will be reconciled once Redis is available |
+
+### Retry a Failed Transcode
+
+```
+POST /v1/assets/:id/retry
+```
+
+Requeues an asset in terminal `error` state after confirming that its source is
+still available. It accepts the same optional `aiOptions` body as `/process`
+and returns the same response shape. Retry is idempotent when another request
+has already requeued the asset.
+
+| HTTP | Stable code | Meaning |
+|------|-------------|---------|
+| 409 | `ASSET_NOT_RETRYABLE` | Asset is not in terminal `error` state |
+| 409 | `ASSET_SOURCE_MISSING` | Neither the source object nor direct-upload file is available |
+| 503 | `QUEUE_UNAVAILABLE` | The durable queued job will be reconciled automatically |
 
 ---
 

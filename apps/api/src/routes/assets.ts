@@ -1,10 +1,10 @@
 import { createWriteStream } from 'node:fs';
-import { mkdir } from 'node:fs/promises';
+import { mkdir, stat } from 'node:fs/promises';
 import path from 'node:path';
 import type { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import type { FastifyInstance } from 'fastify';
-import { and, desc, eq } from 'drizzle-orm';
+import { and, desc, eq, inArray } from 'drizzle-orm';
 import { DeleteObjectCommand, DeleteObjectsCommand, GetObjectCommand, HeadObjectCommand, ListObjectsV2Command, PutObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { nanoid } from 'nanoid';
@@ -13,7 +13,7 @@ import { assets, jobs, renditions, aiJobs, ASSET_STATUS, SOURCE_TYPE, JOB_STATUS
 import { db } from '../db.js';
 import { env, hasStripe } from '../env.js';
 import { s3Client, s3PublicClient } from '../s3.js';
-import { transcodeQueue } from '../queue.js';
+import { enqueueTranscodeJob } from '../queue.js';
 import { findAssetOrFail, getThumbnailUrl, getSourceKey } from '../services/asset.js';
 import { checkLimit } from '../services/metering.js';
 import { dispatchWebhook } from '../services/webhooks.js';
@@ -39,7 +39,138 @@ const importAssetBody = z.object({
   ),
 });
 
+const supportedUploadContentTypes = [
+  'video/mp4',
+  'video/webm',
+  'video/quicktime',
+  'video/x-matroska',
+  'video/x-msvideo',
+  'video/mpeg',
+  'video/ogg',
+] as const;
+const MAX_SOURCE_UPLOAD_BYTES = 50 * 1024 * 1024 * 1024;
+
+const uploadUrlBody = z.object({
+  // Optional so existing clients that always upload MP4 keep working.
+  contentType: z.string().min(1).max(100).optional(),
+}).optional();
+
+const processBody = z.object({
+  aiOptions: z.object({
+    transcription: z.boolean().default(true),
+    subtitles: z.boolean().default(true),
+    chapters: z.boolean().default(true),
+  }).optional(),
+}).optional();
+
+type ProcessBody = z.infer<typeof processBody>;
+
+type QueueResult = {
+  jobId: string;
+  alreadyQueued: boolean;
+};
+
 export async function assetRoutes(app: FastifyInstance) {
+  const findActiveTranscodeJob = async (assetId: string) => {
+    const [activeJob] = await db
+      .select({ id: jobs.id })
+      .from(jobs)
+      .where(and(
+        eq(jobs.assetId, assetId),
+        eq(jobs.type, JOB_TYPE.TRANSCODE),
+        inArray(jobs.status, [JOB_STATUS.QUEUED, JOB_STATUS.PROCESSING]),
+      ))
+      .orderBy(desc(jobs.createdAt))
+      .limit(1);
+    return activeJob;
+  };
+
+  /** Atomically create the durable queue-outbox record and state transition. */
+  const queueAssetForTranscode = async (
+    assetId: string,
+    expectedStatus: typeof ASSET_STATUS.UPLOADED | typeof ASSET_STATUS.ERROR,
+    body?: ProcessBody,
+    currentMetadata?: unknown,
+  ): Promise<QueueResult> => {
+    const jobId = nanoid(ID_LENGTH.JOB);
+    const metadata = body?.aiOptions
+      ? JSON.stringify({
+          ...(currentMetadata
+            ? (typeof currentMetadata === 'string' ? JSON.parse(currentMetadata) : currentMetadata) as Record<string, unknown>
+            : {}),
+          aiOptions: body.aiOptions,
+        })
+      : undefined;
+
+    const createdJobId = await db.transaction(async (tx) => {
+      const updateResult = await tx.update(assets)
+        .set({
+          status: ASSET_STATUS.QUEUED,
+          errorMessage: null,
+          ...(metadata ? { metadata } : {}),
+        })
+        .where(and(eq(assets.id, assetId), eq(assets.status, expectedStatus)));
+
+      if (updateResult[0].affectedRows === 0) return null;
+
+      // A failed attempt may have written a subset of renditions before a
+      // later step failed. They are not playable without a ready asset and
+      // must not be duplicated by the retry.
+      if (expectedStatus === ASSET_STATUS.ERROR) {
+        await tx.delete(renditions).where(eq(renditions.assetId, assetId));
+      }
+
+      await tx.insert(jobs).values({
+        id: jobId,
+        assetId,
+        type: JOB_TYPE.TRANSCODE,
+        status: JOB_STATUS.QUEUED,
+        attempts: 0,
+      });
+      return jobId;
+    });
+
+    if (createdJobId) return { jobId: createdJobId, alreadyQueued: false };
+
+    // A concurrent click/retry won the conditional state transition. Return
+    // that active job instead of inserting a duplicate queue record.
+    const activeJob = await findActiveTranscodeJob(assetId);
+    if (activeJob) return { jobId: activeJob.id, alreadyQueued: true };
+
+    throw new AppError(409, 'Asset is no longer in a processable state', 'ASSET_ALREADY_PROCESSING');
+  };
+
+  const ensureRetrySourceExists = async (asset: typeof assets.$inferSelect) => {
+    if (asset.sourceUrl) return;
+
+    if (asset.sourceKey) {
+      const inObjectStorage = await s3Client
+        .send(new HeadObjectCommand({ Bucket: env.S3_BUCKET, Key: asset.sourceKey }))
+        .then(() => true)
+        .catch(() => false);
+      if (inObjectStorage) return;
+    }
+
+    // Direct/proxy uploads can still be waiting on the shared volume when a
+    // transcode fails before its archival S3 upload.
+    const localSource = path.join(env.UPLOAD_DIR, asset.id, 'input.mp4');
+    const localStat = await stat(localSource).catch(() => null);
+    if (localStat?.isFile() && localStat.size > 0) return;
+
+    throw new AppError(409, 'The uploaded source is no longer available', 'ASSET_SOURCE_MISSING');
+  };
+
+  const enqueueOrReportUnavailable = async (assetId: string, jobId: string) => {
+    try {
+      await enqueueTranscodeJob(jobId, assetId);
+    } catch (error) {
+      app.log.warn({ err: error, assetId, jobId }, 'Transcode job was committed but could not be enqueued');
+      // The reconciler will retry this durable queued job. Returning an
+      // explicit error lets the client display an honest recoverable state.
+      throw new AppError(503, 'Processing queue is temporarily unavailable; the job will be retried automatically', 'QUEUE_UNAVAILABLE');
+    }
+  };
+
   /* Create asset */
   app.post<{ Body: z.infer<typeof createAssetBody> }>('/v1/assets', async (request, reply) => {
     const body = createAssetBody.parse(request.body);
@@ -112,41 +243,65 @@ export async function assetRoutes(app: FastifyInstance) {
   });
 
   /* Get upload URL */
-  app.post<{ Params: { id: string } }>('/v1/assets/:id/upload-url', async (request) => {
+  app.post<{ Params: { id: string }; Body: z.infer<typeof uploadUrlBody> }>('/v1/assets/:id/upload-url', async (request) => {
+    const body = uploadUrlBody.parse(request.body);
     const asset = await findAssetOrFail(request.params.id, request.orgId);
+    if (asset.status !== ASSET_STATUS.CREATED) {
+      throw new AppError(409, 'An upload source has already been confirmed for this asset', 'ASSET_ALREADY_PROCESSING');
+    }
     const sourceKey = getSourceKey(asset.id);
+    const contentType = (body?.contentType ?? 'video/mp4').toLowerCase();
+    if (!(supportedUploadContentTypes as readonly string[]).includes(contentType)) {
+      throw new AppError(415, 'Unsupported video content type', 'UNSUPPORTED_MEDIA_TYPE');
+    }
 
     const command = new PutObjectCommand({
       Bucket: env.S3_BUCKET,
       Key: sourceKey,
-      ContentType: 'video/mp4',
+      ContentType: contentType,
     });
 
     const uploadUrl = await getSignedUrl(s3PublicClient, command, { expiresIn: 3600 });
     await db.update(assets).set({ sourceKey }).where(eq(assets.id, asset.id));
 
-    return { data: { uploadUrl, sourceKey, method: 'PUT' } };
+    return { data: { uploadUrl, sourceKey, method: 'PUT', expiresIn: 3600 } };
   });
 
   /* Confirm S3 presigned upload completed — verifies file exists before marking uploaded */
-  app.post<{ Params: { id: string } }>('/v1/assets/:id/upload-complete', async (request, reply) => {
+  app.post<{ Params: { id: string } }>('/v1/assets/:id/upload-complete', async (request) => {
     const asset = await findAssetOrFail(request.params.id, request.orgId);
     if (!asset.sourceKey) {
-      return reply.code(400).send({ error: 'No upload URL was generated for this asset' });
+      throw new AppError(409, 'No upload URL was generated for this asset', 'UPLOAD_NOT_CONFIRMED');
+    }
+
+    if (asset.status !== ASSET_STATUS.CREATED) {
+      return { data: { id: asset.id, status: asset.status, alreadyConfirmed: true } };
     }
 
     // Verify the file actually exists on S3
     try {
-      await s3Client.send(new HeadObjectCommand({ Bucket: env.S3_BUCKET, Key: asset.sourceKey }));
-    } catch {
-      return reply.code(400).send({ error: 'File not found on storage — upload may have failed' });
+      const source = await s3Client.send(new HeadObjectCommand({ Bucket: env.S3_BUCKET, Key: asset.sourceKey }));
+      if (!source.ContentLength) {
+        throw new AppError(400, 'Uploaded file is empty', 'UPLOAD_NOT_CONFIRMED');
+      }
+      if (source.ContentLength > MAX_SOURCE_UPLOAD_BYTES) {
+        throw new AppError(413, 'Uploaded file exceeds the 50 GB source limit', 'FILE_TOO_LARGE');
+      }
+    } catch (error) {
+      if (error instanceof AppError) throw error;
+      throw new AppError(400, 'File not found on storage — upload may have failed', 'UPLOAD_NOT_CONFIRMED');
     }
 
-    await db.update(assets)
+    const updateResult = await db.update(assets)
       .set({ status: ASSET_STATUS.UPLOADED })
       .where(and(eq(assets.id, asset.id), eq(assets.status, ASSET_STATUS.CREATED)));
 
-    return { data: { id: asset.id, status: ASSET_STATUS.UPLOADED } };
+    if (updateResult[0].affectedRows === 0) {
+      const latest = await findAssetOrFail(asset.id, request.orgId);
+      return { data: { id: latest.id, status: latest.status, alreadyConfirmed: true } };
+    }
+
+    return { data: { id: asset.id, status: ASSET_STATUS.UPLOADED, alreadyConfirmed: false } };
   });
 
   /* Direct upload (saves to shared volume — Worker reads directly, no S3 round-trip) */
@@ -204,17 +359,25 @@ export async function assetRoutes(app: FastifyInstance) {
   });
 
   /* Start processing */
-  const processBody = z.object({
-    aiOptions: z.object({
-      transcription: z.boolean().default(true),
-      subtitles: z.boolean().default(true),
-      chapters: z.boolean().default(true),
-    }).optional(),
-  }).optional();
-
-  app.post<{ Params: { id: string } }>('/v1/assets/:id/process', async (request) => {
+  app.post<{ Params: { id: string }; Body: ProcessBody }>('/v1/assets/:id/process', async (request) => {
     const body = processBody.parse(request.body);
     const asset = await findAssetOrFail(request.params.id, request.orgId);
+
+    if (asset.status === ASSET_STATUS.QUEUED || asset.status === ASSET_STATUS.PROCESSING) {
+      const activeJob = await findActiveTranscodeJob(asset.id);
+      if (!activeJob) {
+        throw new AppError(409, 'Asset is already being processed', 'ASSET_ALREADY_PROCESSING');
+      }
+      return {
+        data: {
+          assetId: asset.id,
+          jobId: activeJob.id,
+          status: JOB_STATUS.QUEUED,
+          accepted: true,
+          alreadyQueued: true,
+        },
+      };
+    }
 
     // Check encoding minutes limit (enforced only with Stripe billing)
     if (hasStripe && request.orgId) {
@@ -225,25 +388,46 @@ export async function assetRoutes(app: FastifyInstance) {
       }
     }
 
-    // Store AI options in asset metadata
-    if (body?.aiOptions) {
-      const existing = asset.metadata ? (typeof asset.metadata === 'string' ? JSON.parse(asset.metadata) : asset.metadata) as Record<string, unknown> : {};
-      await db.update(assets).set({ metadata: JSON.stringify({ ...existing, aiOptions: body.aiOptions }) }).where(eq(assets.id, asset.id));
+    if (asset.status !== ASSET_STATUS.UPLOADED) {
+      const errorCode = asset.status === ASSET_STATUS.CREATED ? 'UPLOAD_NOT_CONFIRMED' : 'ASSET_NOT_RETRYABLE';
+      throw new AppError(409, 'Asset must have an uploaded source before it can be processed', errorCode);
     }
 
-    const jobId = nanoid(ID_LENGTH.JOB);
+    const result = await queueAssetForTranscode(asset.id, ASSET_STATUS.UPLOADED, body, asset.metadata);
+    if (!result.alreadyQueued) await enqueueOrReportUnavailable(asset.id, result.jobId);
 
-    await db.insert(jobs).values({
-      id: jobId,
-      assetId: asset.id,
-      type: JOB_TYPE.TRANSCODE,
-      status: JOB_STATUS.QUEUED,
-      attempts: 0,
-    });
-    await db.update(assets).set({ status: ASSET_STATUS.QUEUED }).where(eq(assets.id, asset.id));
-    await transcodeQueue.add('transcode', { assetId: asset.id, jobId }, { jobId });
+    return {
+      data: {
+        assetId: asset.id,
+        jobId: result.jobId,
+        status: JOB_STATUS.QUEUED,
+        accepted: true,
+        alreadyQueued: result.alreadyQueued,
+      },
+    };
+  });
 
-    return { data: { assetId: asset.id, jobId, status: JOB_STATUS.QUEUED } };
+  /* Requeue an asset after terminal transcode failure. */
+  app.post<{ Params: { id: string }; Body: ProcessBody }>('/v1/assets/:id/retry', async (request) => {
+    const body = processBody.parse(request.body);
+    const asset = await findAssetOrFail(request.params.id, request.orgId);
+    if (asset.status !== ASSET_STATUS.ERROR) {
+      throw new AppError(409, 'Only failed assets can be retried', 'ASSET_NOT_RETRYABLE');
+    }
+
+    await ensureRetrySourceExists(asset);
+    const result = await queueAssetForTranscode(asset.id, ASSET_STATUS.ERROR, body, asset.metadata);
+    if (!result.alreadyQueued) await enqueueOrReportUnavailable(asset.id, result.jobId);
+
+    return {
+      data: {
+        assetId: asset.id,
+        jobId: result.jobId,
+        status: JOB_STATUS.QUEUED,
+        accepted: true,
+        alreadyQueued: result.alreadyQueued,
+      },
+    };
   });
 
   /* Delete asset (hard delete: DB + S3) */

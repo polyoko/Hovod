@@ -4,11 +4,13 @@ import { env } from '../env.js';
 
 export class AppError extends Error {
   public readonly statusCode: number;
+  public readonly code?: string;
 
-  constructor(statusCode: number, message: string) {
+  constructor(statusCode: number, message: string, code?: string) {
     super(message);
     this.name = 'AppError';
     this.statusCode = statusCode;
+    this.code = code;
   }
 }
 
@@ -21,7 +23,10 @@ export class NotFoundError extends AppError {
 export function registerErrorHandler(app: FastifyInstance) {
   app.setErrorHandler((error, request, reply) => {
     if (error instanceof AppError) {
-      return reply.code(error.statusCode).send({ error: error.message });
+      return reply.code(error.statusCode).send({
+        error: error.message,
+        ...(error.code ? { code: error.code } : {}),
+      });
     }
 
     if (error instanceof ZodError) {

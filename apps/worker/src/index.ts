@@ -6,7 +6,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { GetObjectCommand, PutObjectCommand } from '@aws-sdk/client-s3';
-import { Worker } from 'bullmq';
+import { UnrecoverableError, Worker } from 'bullmq';
 import { eq, and } from 'drizzle-orm';
 import { z } from 'zod';
 import { Redis } from 'ioredis';
@@ -40,6 +40,11 @@ const jobDataSchema = z.object({
 function sanitizeErrorMessage(error: unknown): string {
   const raw = error instanceof Error ? error.message : 'Unknown worker error';
   return raw.slice(0, MAX_ERROR_MESSAGE_LENGTH);
+}
+
+function isTerminalSourceError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : '';
+  return /no source available|source file exceeds size limit|downloaded source file exceeds size limit|source video has no valid video stream|only http and https source urls are supported/i.test(message);
 }
 
 /* ─── Hardware-adaptive configuration ─────────────────────── */
@@ -146,7 +151,12 @@ const worker = new Worker(
 
     const setStep = (step: string) => db.update(jobs).set({ currentStep: step }).where(eq(jobs.id, jobId)).catch(() => {});
 
-    await db.update(jobs).set({ status: JOB_STATUS.PROCESSING, currentStep: PROCESSING_STEP.DOWNLOADING, attempts: 1 }).where(eq(jobs.id, jobId));
+    await db.update(jobs).set({
+      status: JOB_STATUS.PROCESSING,
+      currentStep: PROCESSING_STEP.DOWNLOADING,
+      attempts: job.attemptsMade + 1,
+      errorMessage: null,
+    }).where(eq(jobs.id, jobId));
     await db.update(assets).set({ status: ASSET_STATUS.PROCESSING }).where(eq(assets.id, assetId));
 
     const tmpDir = path.join(os.tmpdir(), `hovod-${randomUUID()}`);
@@ -337,16 +347,42 @@ const worker = new Worker(
       const message = sanitizeErrorMessage(error);
       console.error(`[worker] Job ${jobId} failed:`, message);
 
+      const maximumAttempts = typeof job.opts.attempts === 'number' ? job.opts.attempts : 1;
+      const failedAttempts = job.attemptsMade + 1;
+      const terminal = isTerminalSourceError(error) || failedAttempts >= maximumAttempts;
+
       try {
-        await db.update(assets).set({ status: ASSET_STATUS.ERROR, errorMessage: message }).where(eq(assets.id, assetId));
-        await db.update(jobs).set({ status: JOB_STATUS.FAILED, errorMessage: message }).where(and(eq(jobs.id, jobId), eq(jobs.assetId, assetId)));
+        if (terminal) {
+          await db.update(assets).set({ status: ASSET_STATUS.ERROR, errorMessage: message }).where(eq(assets.id, assetId));
+          await db.update(jobs).set({
+            status: JOB_STATUS.FAILED,
+            currentStep: null,
+            attempts: failedAttempts,
+            errorMessage: message,
+          }).where(and(eq(jobs.id, jobId), eq(jobs.assetId, assetId)));
+        } else {
+          // BullMQ applies the exponential backoff. Keep the durable records
+          // queued so a restart/reconciler cannot mistake this for a terminal
+          // failure while BullMQ is scheduling its next attempt.
+          await db.update(assets).set({ status: ASSET_STATUS.QUEUED, errorMessage: null }).where(eq(assets.id, assetId));
+          await db.update(jobs).set({
+            status: JOB_STATUS.QUEUED,
+            currentStep: null,
+            attempts: failedAttempts,
+            errorMessage: message,
+          }).where(and(eq(jobs.id, jobId), eq(jobs.assetId, assetId)));
+        }
       } catch (dbError) {
         console.error('[worker] Failed to update error status in database');
       }
 
-      fireWebhook(WEBHOOK_EVENT.ASSET_ERROR, { assetId, errorMessage: message }, asset.orgId).catch(() => {});
+      if (terminal) {
+        fireWebhook(WEBHOOK_EVENT.ASSET_ERROR, { assetId, errorMessage: message }, asset.orgId).catch(() => {});
+      }
 
-      throw error;
+      // Avoid retrying validation/source errors; infrastructure and provider
+      // errors keep BullMQ's configured retry/backoff behavior.
+      throw terminal ? new UnrecoverableError(message) : error;
     } finally {
       try {
         await rm(tmpDir, { recursive: true, force: true });

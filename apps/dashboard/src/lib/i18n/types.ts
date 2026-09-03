@@ -89,6 +89,22 @@ export interface Translations {
     urlPlaceholder: string;
     importing: string;
     import: string;
+    dragDropMultiple: string;
+    bulkFileLimits: string;
+    filesSelected: string;
+    selectedFiles: string;
+    waitingToUpload: string;
+    verifyingUpload: string;
+    retryUpload: string;
+    retryProcessing: string;
+    viewVideo: string;
+    startNewBatch: string;
+    unsupportedFile: string;
+    fileTooLarge: string;
+    duplicateFile: string;
+    batchFileLimit: string;
+    uploadRecovered: string;
+    selectFileToResume: string;
   };
   videoDetail: {
     backToVideos: string;

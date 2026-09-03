@@ -21,7 +21,7 @@ import { settingsRoutes } from './routes/settings.js';
 import { authRoutes } from './routes/auth.js';
 import { orgRoutes } from './routes/orgs.js';
 import { commentRoutes } from './routes/comments.js';
-import { scheduleAnalyticsJobs } from './queue.js';
+import { scheduleAnalyticsJobs, startTranscodeReconciler } from './queue.js';
 import { closeMetering } from './services/metering.js';
 
 const app = Fastify({
@@ -141,7 +141,14 @@ const start = async () => {
   } catch (err) {
     app.log.warn('Failed to configure S3 bucket (non-fatal — may need manual setup): ' + (err as Error).message);
   }
-  await scheduleAnalyticsJobs();
+  try {
+    await scheduleAnalyticsJobs();
+  } catch (error) {
+    // API writes the durable queued-job record before Redis. Keep the API
+    // available during a Redis outage so the reconciler can deliver it later.
+    app.log.warn('Failed to schedule analytics jobs (will retry on restart): ' + (error as Error).message);
+  }
+  startTranscodeReconciler();
   await app.listen({ port: env.PORT, host: '0.0.0.0' });
 
   const dashboardMode = existsSync(dashboardDir) ? `built-in (:${env.PORT})` : env.DASHBOARD_URL;
