@@ -58,11 +58,6 @@ export async function runMigrations() {
     ALTER TABLE assets ADD COLUMN custom_thumbnail_key VARCHAR(512) NULL AFTER public_settings
   `).catch(() => { /* column already exists */ });
 
-  // Add current_step column for granular processing progress
-  await pool.query(`
-    ALTER TABLE jobs ADD COLUMN current_step VARCHAR(64) NULL AFTER status
-  `).catch(() => { /* column already exists */ });
-
   // Add org_id column if upgrading from a previous version
   await pool.query(`
     ALTER TABLE assets ADD COLUMN org_id VARCHAR(36) NULL AFTER id
@@ -102,6 +97,11 @@ export async function runMigrations() {
       CONSTRAINT fk_jobs_asset FOREIGN KEY (asset_id) REFERENCES assets(id) ON DELETE CASCADE
     )
   `);
+
+  // Add current_step column for granular processing progress
+  await pool.query(`
+    ALTER TABLE jobs ADD COLUMN current_step VARCHAR(64) NULL AFTER status
+  `).catch(() => { /* column already exists */ });
 
   /* ─── Analytics tables ───────────────────────────────────── */
 
