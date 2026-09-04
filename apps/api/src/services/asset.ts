@@ -1,5 +1,5 @@
-import { eq, and, type SQL } from 'drizzle-orm';
-import { assets } from '@hovod/db';
+import { eq, and, ne, type SQL } from 'drizzle-orm';
+import { assets, ASSET_STATUS } from '@hovod/db';
 import { S3_PATHS } from '@hovod/db';
 import { db } from '../db.js';
 import { env } from '../env.js';
@@ -10,7 +10,7 @@ import { NotFoundError } from '../middleware/error-handler.js';
  * When orgId is provided (cloud mode), also verifies the asset belongs to that org.
  */
 export async function findAssetOrFail(id: string, orgId?: string) {
-  const conditions: SQL[] = [eq(assets.id, id)];
+  const conditions: SQL[] = [eq(assets.id, id), ne(assets.status, ASSET_STATUS.DELETED)];
   if (orgId) conditions.push(eq(assets.orgId, orgId));
 
   const [asset] = await db.select().from(assets).where(and(...conditions)).limit(1);

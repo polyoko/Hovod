@@ -122,6 +122,19 @@ export interface Translations {
     batchFileLimit: string;
     uploadRecovered: string;
     selectFileToResume: string;
+    select: string;
+    selectAllVisible: string;
+    selected: string;
+    deleteVideos: string;
+    deleteVideosTitle: string;
+    deleteVideosWarning: string;
+    typeDeleteToConfirm: string;
+    deletionScheduled: string;
+    deletionFailed: string;
+    cannotDeleteProcessing: string;
+    selectionLimit: string;
+    noMatchingVideos: string;
+    clearFilters: string;
   };
   videoDetail: {
     backToVideos: string;

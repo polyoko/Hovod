@@ -3,16 +3,26 @@ import { timeAgo, formatDuration } from '../lib/helpers.js';
 import { StatusBadge } from './StatusBadge.js';
 import { useT } from '../lib/i18n/index.js';
 
-export function AssetCard({ asset, onClick }: { asset: Asset; onClick: () => void }) {
+type AssetCardProps = {
+  asset: Asset;
+  onClick: () => void;
+  selectionMode?: boolean;
+  selected?: boolean;
+  onSelect?: (checked: boolean) => void;
+  selectionDisabled?: boolean;
+  selectionDisabledLabel?: string;
+};
+
+export function AssetCard({ asset, onClick, selectionMode = false, selected = false, onSelect, selectionDisabled = false, selectionDisabledLabel }: AssetCardProps) {
   const { t } = useT();
   return (
     <div
-      className="group bg-zinc-900 border border-zinc-800 rounded-xl overflow-hidden cursor-pointer transition-all hover:border-zinc-700 hover:-translate-y-0.5 hover:shadow-lg hover:shadow-black/20"
-      onClick={onClick}
-      role="button"
-      tabIndex={0}
-      aria-label={`Open ${asset.title}`}
-      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') onClick(); }}
+      className={`group bg-zinc-900 border rounded-xl overflow-hidden transition-all ${selectionMode ? 'cursor-default' : 'cursor-pointer hover:border-zinc-700 hover:-translate-y-0.5 hover:shadow-lg hover:shadow-black/20'} ${selected ? 'border-accent-500 ring-1 ring-accent-500/50' : 'border-zinc-800'}`}
+      onClick={selectionMode ? () => { if (!selectionDisabled) onSelect?.(!selected); } : onClick}
+      role={selectionMode ? undefined : 'button'}
+      tabIndex={selectionMode ? undefined : 0}
+      aria-label={selectionMode ? undefined : `Open ${asset.title}`}
+      onKeyDown={selectionMode ? undefined : (e) => { if (e.key === 'Enter' || e.key === ' ') onClick(); }}
     >
       {/* Thumbnail area */}
       <div
@@ -22,6 +32,22 @@ export function AssetCard({ asset, onClick }: { asset: Asset; onClick: () => voi
             asset.status === 'error'      ? 'bg-gradient-to-br from-red-950/40 to-zinc-900' :
             'bg-zinc-900/60'}`}
       >
+        {selectionMode && (
+          <label
+            className="absolute left-2 top-2 z-20 flex h-7 w-7 items-center justify-center rounded-md bg-black/65 backdrop-blur-sm"
+            title={selectionDisabled ? selectionDisabledLabel : undefined}
+            onClick={(event) => event.stopPropagation()}
+          >
+            <input
+              type="checkbox"
+              checked={selected}
+              disabled={selectionDisabled}
+              onChange={(event) => onSelect?.(event.target.checked)}
+              aria-label={selectionDisabled ? `${asset.title}: ${selectionDisabledLabel}` : `Select ${asset.title}`}
+              className="h-4 w-4 accent-indigo-500 disabled:cursor-not-allowed"
+            />
+          </label>
+        )}
         {asset.thumbnailUrl && (
           <img
             src={asset.thumbnailUrl}

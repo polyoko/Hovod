@@ -1,6 +1,6 @@
 import { Queue, type JobsOptions } from 'bullmq';
 import { and, eq } from 'drizzle-orm';
-import { jobs, JOB_STATUS, JOB_TYPE } from '@hovod/db';
+import { assetDeletionTasks, jobs, DELETION_TASK_STATUS, JOB_STATUS, JOB_TYPE } from '@hovod/db';
 import { db } from './db.js';
 import { env } from './env.js';
 
@@ -59,6 +59,53 @@ export function startTranscodeReconciler(intervalMs = 30_000): () => void {
       .catch((error) => console.warn('[queue] Transcode reconciliation failed:', (error as Error).message));
   };
 
+  run();
+  const timer = setInterval(run, intervalMs);
+  timer.unref();
+  return () => clearInterval(timer);
+}
+
+export const assetDeletionQueue = new Queue('asset-deletion', {
+  connection: { url: env.REDIS_URL },
+});
+
+export const ASSET_DELETION_JOB_OPTIONS: Omit<JobsOptions, 'jobId'> = {
+  attempts: 3,
+  backoff: { type: 'exponential', delay: 1_000 },
+};
+
+export async function enqueueAssetDeletionTask(taskId: string, assetId: string) {
+  return assetDeletionQueue.add('asset-deletion', { taskId, assetId }, {
+    ...ASSET_DELETION_JOB_OPTIONS,
+    jobId: taskId,
+  });
+}
+
+/** Re-deliver deletion tasks committed while Redis was unavailable. */
+export async function reconcileAssetDeletionTasks(): Promise<number> {
+  const queuedTasks = await db
+    .select({ id: assetDeletionTasks.id, assetId: assetDeletionTasks.assetId })
+    .from(assetDeletionTasks)
+    .where(eq(assetDeletionTasks.status, DELETION_TASK_STATUS.QUEUED));
+
+  let enqueued = 0;
+  for (const task of queuedTasks) {
+    const existing = await assetDeletionQueue.getJob(task.id);
+    if (existing) continue;
+    await enqueueAssetDeletionTask(task.id, task.assetId);
+    enqueued += 1;
+  }
+  return enqueued;
+}
+
+export function startAssetDeletionReconciler(intervalMs = 30_000): () => void {
+  const run = () => {
+    reconcileAssetDeletionTasks()
+      .then((count) => {
+        if (count > 0) console.info(`[queue] Reconciled ${count} asset deletion task(s)`);
+      })
+      .catch((error) => console.warn('[queue] Asset deletion reconciliation failed:', (error as Error).message));
+  };
   run();
   const timer = setInterval(run, intervalMs);
   timer.unref();

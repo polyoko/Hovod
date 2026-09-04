@@ -86,6 +86,33 @@ export const aiJobs = mysqlTable('ai_jobs', {
   assetIdIdx: index('idx_ai_jobs_asset_id').on(table.assetId),
 }));
 
+/** S3 purge work for an asset that is already hidden with status `deleted`. */
+export const assetDeletionTasks = mysqlTable('asset_deletion_tasks', {
+  id: varchar('id', { length: 36 }).primaryKey(),
+  assetId: varchar('asset_id', { length: 36 }).notNull().unique().references(() => assets.id, { onDelete: 'cascade' }),
+  orgId: varchar('org_id', { length: 36 }).notNull(),
+  status: varchar('status', { length: 32 }).notNull().default('queued'),
+  attempts: int('attempts').notNull().default(0),
+  lastError: varchar('last_error', { length: 1024 }),
+  createdAt: timestamp('created_at').notNull().defaultNow(),
+  updatedAt: timestamp('updated_at').notNull().defaultNow().onUpdateNow(),
+}, (table) => ({
+  statusIdx: index('idx_asset_deletion_tasks_status').on(table.status),
+  orgIdIdx: index('idx_asset_deletion_tasks_org_id').on(table.orgId),
+}));
+
+/** Stores the result of a bulk command so browser retries cannot duplicate it. */
+export const assetDeletionCommands = mysqlTable('asset_deletion_commands', {
+  id: varchar('id', { length: 36 }).primaryKey(),
+  orgId: varchar('org_id', { length: 36 }).notNull(),
+  idempotencyKey: varchar('idempotency_key', { length: 128 }).notNull(),
+  payloadHash: varchar('payload_hash', { length: 64 }).notNull(),
+  response: json('response').notNull(),
+  createdAt: timestamp('created_at').notNull().defaultNow(),
+}, (table) => ({
+  orgKeyIdx: uniqueIndex('uq_asset_deletion_commands_org_key').on(table.orgId, table.idempotencyKey),
+}));
+
 /* ─── Analytics tables ───────────────────────────────────── */
 
 export const analyticsEvents = mysqlTable('analytics_events', {

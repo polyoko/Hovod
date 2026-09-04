@@ -215,6 +215,36 @@ export async function runMigrations() {
     )
   `);
 
+  /* ─── Durable asset deletion outbox ─────────────────────── */
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS asset_deletion_tasks (
+      id VARCHAR(36) PRIMARY KEY,
+      asset_id VARCHAR(36) NOT NULL UNIQUE,
+      org_id VARCHAR(36) NOT NULL,
+      status VARCHAR(32) NOT NULL DEFAULT 'queued',
+      attempts INT NOT NULL DEFAULT 0,
+      last_error VARCHAR(1024) NULL,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      INDEX idx_adt_status (status),
+      INDEX idx_adt_org_id (org_id),
+      CONSTRAINT fk_adt_asset FOREIGN KEY (asset_id) REFERENCES assets(id) ON DELETE CASCADE
+    )
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS asset_deletion_commands (
+      id VARCHAR(36) PRIMARY KEY,
+      org_id VARCHAR(36) NOT NULL,
+      idempotency_key VARCHAR(128) NOT NULL,
+      payload_hash VARCHAR(64) NOT NULL,
+      response JSON NOT NULL,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE KEY uq_adc_org_key (org_id, idempotency_key)
+    )
+  `);
+
   /* ─── Auth & Organization tables ─────────────────────────── */
 
   await pool.query(`

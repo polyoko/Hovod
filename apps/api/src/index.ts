@@ -22,7 +22,7 @@ import { authRoutes } from './routes/auth.js';
 import { orgRoutes } from './routes/orgs.js';
 import { commentRoutes } from './routes/comments.js';
 import { categoryRoutes } from './routes/categories.js';
-import { scheduleAnalyticsJobs, startTranscodeReconciler } from './queue.js';
+import { scheduleAnalyticsJobs, startAssetDeletionReconciler, startTranscodeReconciler } from './queue.js';
 import { closeMetering } from './services/metering.js';
 
 const app = Fastify({
@@ -151,6 +151,7 @@ const start = async () => {
     app.log.warn('Failed to schedule analytics jobs (will retry on restart): ' + (error as Error).message);
   }
   startTranscodeReconciler();
+  startAssetDeletionReconciler();
   await app.listen({ port: env.PORT, host: '0.0.0.0' });
 
   const dashboardMode = existsSync(dashboardDir) ? `built-in (:${env.PORT})` : env.DASHBOARD_URL;

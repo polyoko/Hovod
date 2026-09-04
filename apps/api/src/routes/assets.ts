@@ -1,23 +1,23 @@
 import { createWriteStream } from 'node:fs';
 import { mkdir, stat } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
 import path from 'node:path';
 import type { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import type { FastifyInstance } from 'fastify';
-import { and, desc, eq, inArray, isNull } from 'drizzle-orm';
-import { DeleteObjectCommand, DeleteObjectsCommand, GetObjectCommand, HeadObjectCommand, ListObjectsV2Command, PutObjectCommand } from '@aws-sdk/client-s3';
+import { and, desc, eq, inArray, isNull, ne } from 'drizzle-orm';
+import { DeleteObjectCommand, GetObjectCommand, HeadObjectCommand, PutObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { nanoid } from 'nanoid';
 import { z } from 'zod';
-import { assets, categories, jobs, renditions, aiJobs, ASSET_STATUS, SOURCE_TYPE, JOB_STATUS, JOB_TYPE, S3_PATHS, ID_LENGTH, TIER_LIMITS, UNLIMITED_TIER_LIMITS, WEBHOOK_EVENT, METADATA_LIMITS, type OrgTier } from '@hovod/db';
+import { assetDeletionCommands, assetDeletionTasks, assets, categories, jobs, renditions, aiJobs, ASSET_STATUS, DELETION_TASK_STATUS, SOURCE_TYPE, JOB_STATUS, JOB_TYPE, S3_PATHS, ID_LENGTH, TIER_LIMITS, UNLIMITED_TIER_LIMITS, METADATA_LIMITS, type OrgTier } from '@hovod/db';
 import { db } from '../db.js';
 import { env, hasStripe } from '../env.js';
 import { s3Client, s3PublicClient } from '../s3.js';
-import { enqueueTranscodeJob } from '../queue.js';
+import { enqueueAssetDeletionTask, enqueueTranscodeJob } from '../queue.js';
 import { findAssetOrFail, getThumbnailUrl, getSourceKey } from '../services/asset.js';
 import { findCategoryOrFail } from './categories.js';
 import { checkLimit } from '../services/metering.js';
-import { dispatchWebhook } from '../services/webhooks.js';
 import { AppError, NotFoundError } from '../middleware/error-handler.js';
 import { generateVttFromSegments } from '../services/vtt.js';
 
@@ -84,6 +84,24 @@ type QueueResult = {
   alreadyQueued: boolean;
 };
 
+const bulkDeleteBody = z.object({
+  assetIds: z.array(z.string().min(1).max(36)).min(1).max(100),
+  idempotencyKey: z.string().min(8).max(128),
+});
+
+const DELETABLE_ASSET_STATUSES = [
+  ASSET_STATUS.CREATED,
+  ASSET_STATUS.UPLOADED,
+  ASSET_STATUS.READY,
+  ASSET_STATUS.ERROR,
+] as const;
+
+type BulkDeleteResult = {
+  acceptedIds: string[];
+  rejected: Array<{ id: string; code: 'ASSET_NOT_FOUND' | 'ASSET_DELETE_IN_PROGRESS' }>;
+  deletionTaskIds: string[];
+};
+
 export async function assetRoutes(app: FastifyInstance) {
   const findActiveTranscodeJob = async (assetId: string) => {
     const [activeJob] = await db
@@ -97,6 +115,90 @@ export async function assetRoutes(app: FastifyInstance) {
       .orderBy(desc(jobs.createdAt))
       .limit(1);
     return activeJob;
+  };
+
+  /**
+   * Hide assets atomically, then deliver their S3 cleanup through a durable
+   * outbox. The DB state is intentionally committed before Redis/S3 work.
+   */
+  const scheduleAssetDeletion = async (rawIds: string[], orgId: string, idempotencyKey: string) => {
+    const assetIds = [...new Set(rawIds)];
+    const payloadHash = createHash('sha256').update(JSON.stringify([...assetIds].sort())).digest('hex');
+    const [existing] = await db.select().from(assetDeletionCommands).where(and(
+      eq(assetDeletionCommands.orgId, orgId),
+      eq(assetDeletionCommands.idempotencyKey, idempotencyKey),
+    )).limit(1);
+
+    if (existing) {
+      if (existing.payloadHash !== payloadHash) {
+        throw new AppError(409, 'Idempotency key was already used for another deletion request', 'IDEMPOTENCY_KEY_REUSED');
+      }
+      const storedResponse = typeof existing.response === 'string'
+        ? JSON.parse(existing.response) as BulkDeleteResult
+        : existing.response as BulkDeleteResult;
+      return { result: storedResponse, queuedForReconciliation: false };
+    }
+
+    const result = await db.transaction(async (tx) => {
+      const candidates = await tx.select({ id: assets.id, status: assets.status })
+        .from(assets)
+        .where(and(eq(assets.orgId, orgId), inArray(assets.id, assetIds)));
+      const byId = new Map(candidates.map((asset) => [asset.id, asset]));
+      const acceptedIds: string[] = [];
+      const rejected: BulkDeleteResult['rejected'] = [];
+      const deletionTaskIds: string[] = [];
+
+      for (const id of assetIds) {
+        const asset = byId.get(id);
+        if (!asset || asset.status === ASSET_STATUS.DELETED) {
+          rejected.push({ id, code: 'ASSET_NOT_FOUND' });
+          continue;
+        }
+        if (!(DELETABLE_ASSET_STATUSES as readonly string[]).includes(asset.status)) {
+          rejected.push({ id, code: 'ASSET_DELETE_IN_PROGRESS' });
+          continue;
+        }
+
+        // A status predicate makes this safe if a worker changes the asset
+        // between the read above and this write.
+        const updateResult = await tx.update(assets)
+          .set({ status: ASSET_STATUS.DELETED })
+          .where(and(eq(assets.id, id), eq(assets.orgId, orgId), eq(assets.status, asset.status)));
+        if (updateResult[0].affectedRows !== 1) {
+          rejected.push({ id, code: 'ASSET_DELETE_IN_PROGRESS' });
+          continue;
+        }
+
+        const taskId = nanoid(ID_LENGTH.DELETION_TASK);
+        await tx.insert(assetDeletionTasks).values({
+          id: taskId,
+          assetId: id,
+          orgId,
+          status: DELETION_TASK_STATUS.QUEUED,
+          attempts: 0,
+        });
+        acceptedIds.push(id);
+        deletionTaskIds.push(taskId);
+      }
+
+      const response: BulkDeleteResult = { acceptedIds, rejected, deletionTaskIds };
+      await tx.insert(assetDeletionCommands).values({
+        id: nanoid(ID_LENGTH.DELETION_COMMAND),
+        orgId,
+        idempotencyKey,
+        payloadHash,
+        response,
+      });
+      return response;
+    });
+
+    const enqueueResults = await Promise.allSettled(
+      result.deletionTaskIds.map((taskId, index) => enqueueAssetDeletionTask(taskId, result.acceptedIds[index])),
+    );
+    return {
+      result,
+      queuedForReconciliation: enqueueResults.some((entry) => entry.status === 'rejected'),
+    };
   };
 
   /** Atomically create the durable queue-outbox record and state transition. */
@@ -223,7 +325,7 @@ export async function assetRoutes(app: FastifyInstance) {
   /** Assets of one org, newest first, optionally narrowed to a single category.
    *  `uncategorized` selects the assets with no category. */
   const listAssetsForOrg = async (orgId: string, categoryId?: string) => {
-    const filters = [eq(assets.orgId, orgId)];
+    const filters = [eq(assets.orgId, orgId), ne(assets.status, ASSET_STATUS.DELETED)];
     if (categoryId === UNCATEGORIZED) filters.push(isNull(assets.categoryId));
     else if (categoryId) filters.push(eq(assets.categoryId, categoryId));
 
@@ -486,43 +588,28 @@ export async function assetRoutes(app: FastifyInstance) {
     };
   });
 
-  /* Delete asset (hard delete: DB + S3) */
+  /** Queue permanent deletion of up to 100 assets without making the request
+   * wait for paginated S3 cleanup. */
+  app.post<{ Body: z.infer<typeof bulkDeleteBody> }>('/v1/assets/bulk-delete', async (request, reply) => {
+    const body = bulkDeleteBody.parse(request.body);
+    const { result, queuedForReconciliation } = await scheduleAssetDeletion(body.assetIds, request.orgId!, body.idempotencyKey);
+    reply.code(202);
+    return { data: { ...result, queuedForReconciliation } };
+  });
+
+  /* Backwards-compatible single-asset entry point using the same safe path. */
   app.delete<{ Params: { id: string } }>('/v1/assets/:id', async (request) => {
-    const asset = await findAssetOrFail(request.params.id, request.orgId);
-
-    // Delete all S3 objects under sources/{id}/ and playback/{id}/
-    const prefixes = [
-      `${S3_PATHS.SOURCES_PREFIX}/${asset.id}/`,
-      `${S3_PATHS.PLAYBACK_PREFIX}/${asset.id}/`,
-    ];
-
-    for (const prefix of prefixes) {
-      let continuationToken: string | undefined;
-      do {
-        const list = await s3Client.send(new ListObjectsV2Command({
-          Bucket: env.S3_BUCKET,
-          Prefix: prefix,
-          ContinuationToken: continuationToken,
-        }));
-
-        if (list.Contents && list.Contents.length > 0) {
-          await s3Client.send(new DeleteObjectsCommand({
-            Bucket: env.S3_BUCKET,
-            Delete: { Objects: list.Contents.map((o) => ({ Key: o.Key })) },
-          }));
-        }
-
-        continuationToken = list.IsTruncated ? list.NextContinuationToken : undefined;
-      } while (continuationToken);
+    const { result, queuedForReconciliation } = await scheduleAssetDeletion(
+      [request.params.id], request.orgId!, nanoid(ID_LENGTH.DELETION_COMMAND),
+    );
+    if (result.acceptedIds.length === 0) {
+      const rejection = result.rejected[0];
+      if (rejection?.code === 'ASSET_DELETE_IN_PROGRESS') {
+        throw new AppError(409, 'Assets being processed cannot be deleted yet', rejection.code);
+      }
+      throw new NotFoundError('Asset not found');
     }
-
-    // Hard delete from DB (FK CASCADE removes renditions + jobs)
-    await db.delete(assets).where(eq(assets.id, asset.id));
-
-    // Dispatch webhook (fire-and-forget)
-    dispatchWebhook(WEBHOOK_EVENT.ASSET_DELETED, { assetId: asset.id, title: asset.title }, asset.orgId).catch(() => {});
-
-    return { data: { id: asset.id, deleted: true } };
+    return { data: { id: request.params.id, deleted: true, deletionPending: true, queuedForReconciliation } };
   });
 
   /* ─── Inline editing endpoints ─────────────────────────── */

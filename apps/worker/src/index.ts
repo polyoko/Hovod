@@ -5,13 +5,13 @@ import { Readable } from 'node:stream';
 import path from 'node:path';
 import os from 'node:os';
 import { randomUUID } from 'node:crypto';
-import { GetObjectCommand, PutObjectCommand } from '@aws-sdk/client-s3';
+import { DeleteObjectsCommand, GetObjectCommand, ListObjectsV2Command, PutObjectCommand } from '@aws-sdk/client-s3';
 import { UnrecoverableError, Worker } from 'bullmq';
 import { eq, and } from 'drizzle-orm';
 import { z } from 'zod';
 import { Redis } from 'ioredis';
 import { nanoid } from 'nanoid';
-import { assets, organizations, settings, aiJobs, createDb, jobs, renditions, ASSET_STATUS, JOB_STATUS, AI_JOB_STATUS, S3_PATHS, ID_LENGTH, WEBHOOK_EVENT, PROCESSING_STEP } from '@hovod/db';
+import { assetDeletionTasks, analyticsAssetStats, analyticsDaily, analyticsEvents, assets, organizations, settings, aiJobs, createDb, jobs, renditions, ASSET_STATUS, DELETION_TASK_STATUS, JOB_STATUS, AI_JOB_STATUS, S3_PATHS, ID_LENGTH, WEBHOOK_EVENT, PROCESSING_STEP } from '@hovod/db';
 import { isNull } from 'drizzle-orm';
 import { env } from './env.js';
 import { createAnalyticsWorker } from './analytics-worker.js';
@@ -36,6 +36,11 @@ const MAX_ERROR_MESSAGE_LENGTH = 200;
 const jobDataSchema = z.object({
   assetId: z.string().min(1).max(36),
   jobId: z.string().min(1).max(36),
+});
+
+const deletionJobDataSchema = z.object({
+  taskId: z.string().min(1).max(36),
+  assetId: z.string().min(1).max(36),
 });
 
 function sanitizeErrorMessage(error: unknown): string {
@@ -416,6 +421,74 @@ worker.on('failed', (job, err) => {
   console.error(`[worker] Job ${job?.id} failed:`, err.message);
 });
 
+/* ─── Asset deletion worker ───────────────────────────────── */
+
+const assetDeletionWorker = new Worker(
+  'asset-deletion',
+  async (job) => {
+    const { taskId, assetId } = deletionJobDataSchema.parse(job.data);
+    const [task] = await db.select().from(assetDeletionTasks).where(eq(assetDeletionTasks.id, taskId)).limit(1);
+    if (!task) return;
+
+    const [asset] = await db.select().from(assets).where(eq(assets.id, assetId)).limit(1);
+    if (!asset || asset.status !== ASSET_STATUS.DELETED) return;
+
+    await db.update(assetDeletionTasks).set({
+      status: DELETION_TASK_STATUS.PROCESSING,
+      attempts: job.attemptsMade + 1,
+      lastError: null,
+    }).where(eq(assetDeletionTasks.id, taskId));
+
+    try {
+      for (const prefix of [
+        `${S3_PATHS.SOURCES_PREFIX}/${assetId}/`,
+        `${S3_PATHS.PLAYBACK_PREFIX}/${assetId}/`,
+      ]) {
+        let continuationToken: string | undefined;
+        do {
+          const list = await s3.send(new ListObjectsV2Command({
+            Bucket: env.S3_BUCKET,
+            Prefix: prefix,
+            ContinuationToken: continuationToken,
+          }));
+          if (list.Contents?.length) {
+            await s3.send(new DeleteObjectsCommand({
+              Bucket: env.S3_BUCKET,
+              Delete: { Objects: list.Contents.flatMap((object) => object.Key ? [{ Key: object.Key }] : []) },
+            }));
+          }
+          continuationToken = list.IsTruncated ? list.NextContinuationToken : undefined;
+        } while (continuationToken);
+      }
+
+      // All dependant rows, including the task, are removed by FK cascade only
+      // after storage cleanup succeeds.
+      await Promise.all([
+        db.delete(analyticsEvents).where(eq(analyticsEvents.assetId, assetId)),
+        db.delete(analyticsDaily).where(eq(analyticsDaily.assetId, assetId)),
+        db.delete(analyticsAssetStats).where(eq(analyticsAssetStats.assetId, assetId)),
+      ]);
+      await db.delete(assets).where(and(eq(assets.id, assetId), eq(assets.status, ASSET_STATUS.DELETED)));
+      fireWebhook(WEBHOOK_EVENT.ASSET_DELETED, { assetId, title: asset.title }, asset.orgId).catch(() => {});
+    } catch (error) {
+      const message = sanitizeErrorMessage(error);
+      const maximumAttempts = typeof job.opts.attempts === 'number' ? job.opts.attempts : 1;
+      const terminal = job.attemptsMade + 1 >= maximumAttempts;
+      await db.update(assetDeletionTasks).set({
+        status: terminal ? DELETION_TASK_STATUS.FAILED : DELETION_TASK_STATUS.QUEUED,
+        attempts: job.attemptsMade + 1,
+        lastError: message,
+      }).where(eq(assetDeletionTasks.id, taskId));
+      throw terminal ? new UnrecoverableError(message) : error;
+    }
+  },
+  { connection: { url: env.REDIS_URL }, concurrency: 2 },
+);
+
+assetDeletionWorker.on('failed', (job, err) => {
+  console.error(`[asset-deletion] Task ${job?.id} failed:`, err.message);
+});
+
 /* ─── Analytics Worker ────────────────────────────────────── */
 
 const analyticsWorker = createAnalyticsWorker(env.REDIS_URL);
@@ -423,7 +496,7 @@ const analyticsWorker = createAnalyticsWorker(env.REDIS_URL);
 /* Graceful shutdown */
 async function shutdown(signal: string) {
   console.log(`[worker] Received ${signal}, shutting down...`);
-  await Promise.all([worker.close(), analyticsWorker.close(), redis.quit()]);
+  await Promise.all([worker.close(), assetDeletionWorker.close(), analyticsWorker.close(), redis.quit()]);
   process.exit(0);
 }
 
