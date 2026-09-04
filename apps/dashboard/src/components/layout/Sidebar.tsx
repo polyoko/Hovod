@@ -59,7 +59,7 @@ export function Sidebar({ mobileOpen, onClose }: SidebarProps) {
 
       {/* Sidebar */}
       <aside
-        className={`fixed top-0 left-0 z-50 h-full w-[260px] bg-zinc-950 border-r border-zinc-800/60 flex flex-col transition-transform lg:translate-x-0 lg:static lg:z-auto ${
+        className={`fixed top-0 left-0 z-50 h-full w-[260px] bg-zinc-950 border-r border-zinc-800/60 flex flex-col transition-transform lg:sticky lg:top-0 lg:h-dvh lg:translate-x-0 lg:z-auto ${
           mobileOpen ? 'translate-x-0' : '-translate-x-full'
         }`}
       >
