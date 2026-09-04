@@ -195,6 +195,7 @@ export const settings = mysqlTable('settings', {
   aiAutoTranscribe: varchar('ai_auto_transcribe', { length: 5 }).notNull().default('true'),
   aiAutoChapter: varchar('ai_auto_chapter', { length: 5 }).notNull().default('true'),
   keepOriginalSourceFiles: varchar('keep_original_source_files', { length: 5 }).notNull().default('true'),
+  enabledRenditions: varchar('enabled_renditions', { length: 64 }).notNull().default('["360p","480p","720p","1080p"]'),
   createdAt: timestamp('created_at').notNull().defaultNow(),
   updatedAt: timestamp('updated_at').notNull().defaultNow().onUpdateNow(),
 }, (table) => ({

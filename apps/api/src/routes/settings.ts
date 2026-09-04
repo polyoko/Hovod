@@ -7,6 +7,37 @@ import { settings, ID_LENGTH, S3_PATHS, DEFAULT_SETTINGS } from '@hovod/db';
 import { db } from '../db.js';
 import { env } from '../env.js';
 import { s3Client } from '../s3.js';
+import { AppError } from '../middleware/error-handler.js';
+
+const SUPPORTED_RENDITIONS = ['360p', '480p', '720p', '1080p'] as const;
+const DEFAULT_RENDITIONS = [...DEFAULT_SETTINGS.TRANSCODING_RENDITIONS];
+
+function parseEnabledRenditions(value: string | null | undefined): string[] {
+  try {
+    const parsed = JSON.parse(value ?? '');
+    if (
+      Array.isArray(parsed) &&
+      parsed.length > 0 &&
+      parsed.length <= SUPPORTED_RENDITIONS.length &&
+      new Set(parsed).size === parsed.length &&
+      parsed.every((quality) => typeof quality === 'string' && SUPPORTED_RENDITIONS.includes(quality as typeof SUPPORTED_RENDITIONS[number]))
+    ) return parsed;
+  } catch { /* fall through to safe default */ }
+  return DEFAULT_RENDITIONS;
+}
+
+function validateEnabledRenditions(value: unknown): string[] {
+  if (
+    !Array.isArray(value) ||
+    value.length === 0 ||
+    value.length > SUPPORTED_RENDITIONS.length ||
+    new Set(value).size !== value.length ||
+    !value.every((quality) => typeof quality === 'string' && SUPPORTED_RENDITIONS.includes(quality as typeof SUPPORTED_RENDITIONS[number]))
+  ) {
+    throw new AppError(400, 'Select at least one supported output quality', 'INVALID_RENDITIONS');
+  }
+  return SUPPORTED_RENDITIONS.filter((quality) => value.includes(quality));
+}
 
 /* ─── Helpers ────────────────────────────────────────────── */
 
@@ -22,6 +53,7 @@ function formatRow(row: typeof settings.$inferSelect) {
     aiAutoTranscribe: row.aiAutoTranscribe === 'true',
     aiAutoChapter: row.aiAutoChapter === 'true',
     keepOriginalSourceFiles: row.keepOriginalSourceFiles === 'true',
+    enabledRenditions: parseEnabledRenditions(row.enabledRenditions),
   };
 }
 
@@ -39,6 +71,7 @@ async function ensureSettingsRow(orgId: string | null | undefined) {
     aiAutoTranscribe: String(DEFAULT_SETTINGS.AI_AUTO_TRANSCRIBE),
     aiAutoChapter: String(DEFAULT_SETTINGS.AI_AUTO_CHAPTER),
     keepOriginalSourceFiles: 'true',
+    enabledRenditions: JSON.stringify(DEFAULT_RENDITIONS),
   });
   const [row] = await db.select().from(settings).where(condition).limit(1);
   return row!;
@@ -52,6 +85,7 @@ const updateBody = z.object({
   aiAutoTranscribe: z.boolean().optional(),
   aiAutoChapter: z.boolean().optional(),
   keepOriginalSourceFiles: z.boolean().optional(),
+  enabledRenditions: z.unknown().optional(),
 });
 
 /* ─── Routes ─────────────────────────────────────────────── */
@@ -87,6 +121,7 @@ export async function settingsRoutes(app: FastifyInstance) {
     if (body.aiAutoTranscribe !== undefined) updates.aiAutoTranscribe = String(body.aiAutoTranscribe);
     if (body.aiAutoChapter !== undefined) updates.aiAutoChapter = String(body.aiAutoChapter);
     if (body.keepOriginalSourceFiles !== undefined) updates.keepOriginalSourceFiles = String(body.keepOriginalSourceFiles);
+    if (body.enabledRenditions !== undefined) updates.enabledRenditions = JSON.stringify(validateEnabledRenditions(body.enabledRenditions));
 
     if (Object.keys(updates).length > 0) {
       await db.update(settings).set(updates).where(eq(settings.id, row.id));

@@ -255,8 +255,29 @@ const worker = new Worker(
         throw new Error('Source video has no valid video stream');
       }
 
-      /* Transcode each rendition (skip resolutions above source) */
-      const ladder = filterLadder(probe.width, probe.height);
+      /* Read the organization's output-quality setting. A malformed or
+       * unavailable setting falls back to the standard four-rung ladder so a
+       * transient settings failure never prevents playback. */
+      let enabledRenditions = ['360p', '480p', '720p', '1080p'];
+      try {
+        const condition = asset.orgId ? eq(settings.orgId, asset.orgId) : isNull(settings.orgId);
+        const [settingsRow] = await db.select({ enabledRenditions: settings.enabledRenditions })
+          .from(settings).where(condition).limit(1);
+        const configured = JSON.parse(settingsRow?.enabledRenditions ?? '[]');
+        if (Array.isArray(configured) && configured.length > 0) {
+          const allowed = new Set(['360p', '480p', '720p', '1080p']);
+          const unique = [...new Set(configured)];
+          if (unique.every((quality) => typeof quality === 'string' && allowed.has(quality))) {
+            enabledRenditions = unique;
+          }
+        }
+      } catch { /* retain the safe default */ }
+
+      /* Transcode selected renditions only, skipping profiles above the source.
+       * filterLadder retains the lowest selected profile for tiny sources so
+       * every successfully processed video still has a playable stream. */
+      const selectedProfiles = TRANSCODING_LADDER.filter((profile) => enabledRenditions.includes(profile.quality));
+      const ladder = filterLadder(probe.width, probe.height, selectedProfiles);
       console.log(`[worker] Ladder: ${ladder.map(p => p.quality).join(', ')}`);
 
       const encoded: EncodedRendition[] = [];

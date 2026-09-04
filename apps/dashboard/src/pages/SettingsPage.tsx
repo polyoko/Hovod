@@ -102,6 +102,7 @@ function PlatformSettingsSection() {
   const [aiAutoTranscribe, setAiAutoTranscribe] = useState(settings.aiAutoTranscribe);
   const [aiAutoChapter, setAiAutoChapter] = useState(settings.aiAutoChapter);
   const [keepOriginalSourceFiles, setKeepOriginalSourceFiles] = useState(settings.keepOriginalSourceFiles);
+  const [enabledRenditions, setEnabledRenditions] = useState(settings.enabledRenditions);
   const [saving, setSaving] = useState(false);
   const [uploadingLogo, setUploadingLogo] = useState(false);
   const [error, setError] = useState('');
@@ -114,6 +115,7 @@ function PlatformSettingsSection() {
     setAiAutoTranscribe(settings.aiAutoTranscribe);
     setAiAutoChapter(settings.aiAutoChapter);
     setKeepOriginalSourceFiles(settings.keepOriginalSourceFiles);
+    setEnabledRenditions(settings.enabledRenditions);
   }, [settings]);
 
   const hasChanges =
@@ -121,7 +123,8 @@ function PlatformSettingsSection() {
     theme !== settings.theme ||
     aiAutoTranscribe !== settings.aiAutoTranscribe ||
     aiAutoChapter !== settings.aiAutoChapter ||
-    keepOriginalSourceFiles !== settings.keepOriginalSourceFiles;
+    keepOriginalSourceFiles !== settings.keepOriginalSourceFiles ||
+    enabledRenditions.join(',') !== settings.enabledRenditions.join(',');
 
   const handleColorChange = (color: string) => {
     setPrimaryColor(color);
@@ -135,7 +138,7 @@ function PlatformSettingsSection() {
     try {
       await api<PlatformSettings>('/v1/settings', {
         method: 'PATCH',
-        body: JSON.stringify({ primaryColor, theme, aiAutoTranscribe, aiAutoChapter, keepOriginalSourceFiles }),
+        body: JSON.stringify({ primaryColor, theme, aiAutoTranscribe, aiAutoChapter, keepOriginalSourceFiles, enabledRenditions }),
       });
       await refetch();
       setSuccess(t.settings.settingsSaved);
@@ -342,6 +345,56 @@ function PlatformSettingsSection() {
             <Toggle checked={aiAutoChapter} onChange={setAiAutoChapter} />
           </div>
         </div>
+      </section>
+
+      {/* Transcoding output qualities */}
+      <section className="p-5 bg-zinc-900/60 border border-zinc-800/60 rounded-xl">
+        <h2 className="text-sm font-semibold text-zinc-300 mb-1">{t.settings.outputQualities}</h2>
+        <p className="text-xs text-zinc-600 mb-4">{t.settings.outputQualitiesDesc}</p>
+        <fieldset>
+          <legend className="sr-only">{t.settings.outputQualities}</legend>
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+            {[
+              { quality: '360p', detail: '640 × 360 · 1 Mbps' },
+              { quality: '480p', detail: '854 × 480 · 1.8 Mbps' },
+              { quality: '720p', detail: '1280 × 720 · 3 Mbps' },
+              { quality: '1080p', detail: '1920 × 1080 · 6 Mbps' },
+            ].map(({ quality, detail }) => {
+              const selected = enabledRenditions.includes(quality);
+              const lastSelected = selected && enabledRenditions.length === 1;
+              return (
+                <label
+                  key={quality}
+                  className={`relative min-h-20 cursor-pointer rounded-lg border px-3 py-2.5 transition-colors focus-within:ring-2 focus-within:ring-accent-500/70 ${
+                    selected
+                      ? 'border-accent-500/60 bg-accent-500/10'
+                      : 'border-zinc-800 bg-zinc-950/30 hover:border-zinc-700'
+                  } ${lastSelected ? 'cursor-not-allowed' : ''}`}
+                >
+                  <input
+                    type="checkbox"
+                    checked={selected}
+                    disabled={lastSelected}
+                    onChange={() => setEnabledRenditions((current) => selected
+                      ? current.filter((item) => item !== quality)
+                      : [...current, quality])}
+                    className="sr-only"
+                  />
+                  <span className="flex items-start justify-between gap-2">
+                    <span>
+                      <span className="block text-sm font-medium text-zinc-100">{quality}</span>
+                      <span className="mt-0.5 block text-[11px] leading-4 text-zinc-500">{detail}</span>
+                    </span>
+                    <span aria-hidden="true" className={`mt-0.5 flex h-4 w-4 items-center justify-center rounded border text-[10px] ${selected ? 'border-accent-500 bg-accent-600 text-white' : 'border-zinc-600'}`}>
+                      {selected ? '✓' : ''}
+                    </span>
+                  </span>
+                </label>
+              );
+            })}
+          </div>
+        </fieldset>
+        <p className="mt-3 text-xs text-zinc-500">{t.settings.outputQualitiesNote}</p>
       </section>
 
       {/* Original source retention */}

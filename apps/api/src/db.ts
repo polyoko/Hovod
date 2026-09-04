@@ -334,6 +334,7 @@ export async function runMigrations() {
       ai_auto_transcribe VARCHAR(5) NOT NULL DEFAULT 'true',
       ai_auto_chapter VARCHAR(5) NOT NULL DEFAULT 'true',
       keep_original_source_files VARCHAR(5) NOT NULL DEFAULT 'true',
+      enabled_renditions VARCHAR(64) NOT NULL DEFAULT '["360p","480p","720p","1080p"]',
       created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
       updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
       INDEX idx_settings_org_id (org_id),
@@ -343,6 +344,9 @@ export async function runMigrations() {
   `);
   await pool.query(`
     ALTER TABLE settings ADD COLUMN keep_original_source_files VARCHAR(5) NOT NULL DEFAULT 'true' AFTER ai_auto_chapter
+  `).catch(() => { /* column already exists */ });
+  await pool.query(`
+    ALTER TABLE settings ADD COLUMN enabled_renditions VARCHAR(64) NOT NULL DEFAULT '["360p","480p","720p","1080p"]' AFTER keep_original_source_files
   `).catch(() => { /* column already exists */ });
 
   /* ─── Comments table ────────────────────────────────────── */

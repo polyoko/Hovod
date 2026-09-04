@@ -237,4 +237,5 @@ export const DEFAULT_SETTINGS = {
   THEME: 'dark',
   AI_AUTO_TRANSCRIBE: true,
   AI_AUTO_CHAPTER: true,
+  TRANSCODING_RENDITIONS: ['360p', '480p', '720p', '1080p'],
 } as const;

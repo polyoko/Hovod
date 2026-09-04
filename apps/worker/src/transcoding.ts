@@ -25,13 +25,17 @@ export const TRANSCODING_LADDER: RenditionProfile[] = [
 /**
  * Filter the transcoding ladder to only include renditions at or below the
  * source resolution. Handles portrait videos by comparing against the short
- * side. Always returns at least the lowest rendition (360p) to guarantee
- * a playable output even for very small sources.
+ * side. Always returns the lowest configured rendition to guarantee a
+ * playable output even for very small sources.
  */
-export function filterLadder(sourceWidth: number, sourceHeight: number): RenditionProfile[] {
+export function filterLadder(
+  sourceWidth: number,
+  sourceHeight: number,
+  profiles: RenditionProfile[] = TRANSCODING_LADDER,
+): RenditionProfile[] {
   const shortSide = Math.min(sourceWidth, sourceHeight);
-  const filtered = TRANSCODING_LADDER.filter(p => p.height <= shortSide);
-  return filtered.length > 0 ? filtered : [TRANSCODING_LADDER[0]];
+  const filtered = profiles.filter(p => p.height <= shortSide);
+  return filtered.length > 0 ? filtered : [profiles[0]!];
 }
 
 export async function transcodeRendition(

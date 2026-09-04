@@ -9,6 +9,7 @@ const DEFAULT_SETTINGS: PlatformSettings = {
   aiAutoTranscribe: true,
   aiAutoChapter: true,
   keepOriginalSourceFiles: true,
+  enabledRenditions: ['360p', '480p', '720p', '1080p'],
 };
 
 interface SettingsContextValue {

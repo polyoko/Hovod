@@ -247,6 +247,9 @@ export interface Translations {
     failedUpdateName: string;
     failedCheckout: string;
     failedPortal: string;
+    outputQualities: string;
+    outputQualitiesDesc: string;
+    outputQualitiesNote: string;
     storageDesc: string;
     keepOriginalSourceFiles: string;
     keepOriginalSourceFilesDesc: string;

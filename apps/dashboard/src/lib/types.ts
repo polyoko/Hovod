@@ -144,6 +144,7 @@ export interface PlatformSettings {
   aiAutoTranscribe: boolean;
   aiAutoChapter: boolean;
   keepOriginalSourceFiles: boolean;
+  enabledRenditions: string[];
 }
 
 /* ─── Organization ───────────────────────────────────────── */
