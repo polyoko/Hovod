@@ -70,6 +70,7 @@ Creates a new asset in `created` state with a unique playback ID.
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `title` | `string` | Yes | Name of the video (min 1 character) |
+| `categoryId` | `string` | No | Category to file the video under. Must belong to the same organization |
 
 **Example**
 
@@ -98,6 +99,14 @@ curl -X POST http://localhost:3002/v1/assets \
 ```
 GET /v1/assets
 ```
+
+**Query Parameters**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `categoryId` | `string` | Only assets in this category. Pass `uncategorized` for assets with no category |
+
+Each asset carries `categoryId` and an expanded `category` object (`null` when uncategorized).
 
 Returns all assets ordered by creation date (newest first).
 
@@ -468,6 +477,68 @@ curl -X DELETE http://localhost:3002/v1/assets/a1b2c3d4e5f6
 ```json
 { "error": "Asset not found" }
 ```
+
+---
+
+## Categories
+
+Categories group videos so they can be filtered and exported. A video belongs to at most one
+category. Deleting a category never deletes its videos — they become uncategorized.
+
+### List Categories
+
+```
+GET /v1/categories
+```
+
+Returns every category in the organization, sorted by name, each with its `assetCount`.
+
+### Create Category
+
+```
+POST /v1/categories
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `name` | `string` | Yes | 1–100 characters, unique within the organization |
+| `color` | `string` | No | `#rrggbb` hex value used for the badge |
+
+**Response** `201`
+
+```json
+{ "data": { "id": "c1b2c3d4e5f6", "name": "Training", "color": null, "assetCount": 0 } }
+```
+
+Returns `409` with code `CATEGORY_NAME_TAKEN` when the name is already used.
+
+### Update Category
+
+```
+PATCH /v1/categories/:id
+```
+
+Accepts `name` and/or `color`.
+
+### Delete Category
+
+```
+DELETE /v1/categories/:id
+```
+
+Videos in the category are kept and become uncategorized.
+
+---
+
+### Export Assets as CSV
+
+```
+GET /v1/assets/export.csv
+```
+
+Downloads `id,title,category,status,duration_sec,playback_id,created_at` for the organization,
+accepting the same `categoryId` filter as `GET /v1/assets`. Capped at 10,000 rows; responses that
+hit the cap carry `X-Truncated: true`.
 
 ---
 

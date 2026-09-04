@@ -63,6 +63,30 @@ export async function runMigrations() {
     ALTER TABLE assets ADD COLUMN org_id VARCHAR(36) NULL AFTER id
   `).catch(() => { /* column already exists */ });
 
+  // Video categories. Created before the assets FK below so the constraint resolves.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS categories (
+      id VARCHAR(36) PRIMARY KEY,
+      org_id VARCHAR(36) NOT NULL,
+      name VARCHAR(100) NOT NULL,
+      color VARCHAR(7) NULL,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      UNIQUE KEY uq_categories_org_name (org_id, name)
+    )
+  `);
+  await pool.query(`
+    ALTER TABLE assets ADD COLUMN category_id VARCHAR(36) NULL AFTER title
+  `).catch(() => { /* column already exists */ });
+  await pool.query(`
+    ALTER TABLE assets ADD INDEX idx_assets_category_id (category_id)
+  `).catch(() => { /* index already exists */ });
+  // SET NULL, not CASCADE: deleting a category must never delete its videos.
+  await pool.query(`
+    ALTER TABLE assets ADD CONSTRAINT fk_assets_category
+      FOREIGN KEY (category_id) REFERENCES categories(id) ON DELETE SET NULL
+  `).catch(() => { /* constraint already exists */ });
+
   await pool.query(`
     CREATE TABLE IF NOT EXISTS renditions (
       id VARCHAR(36) PRIMARY KEY,

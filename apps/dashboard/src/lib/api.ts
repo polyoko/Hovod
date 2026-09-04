@@ -43,3 +43,24 @@ export async function api<T>(path: string, init?: RequestInit & { raw?: boolean 
     clearTimeout(timeout);
   }
 }
+
+/** Fetch a file response and hand it to the browser as a download. */
+export async function apiDownload(path: string, fallbackFilename: string) {
+  const token = getToken();
+  const res = await fetch(`${API}${path}`, {
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  });
+  if (!res.ok) {
+    const json = await res.json().catch(() => ({}));
+    throw new Error(json.error || `Request failed (${res.status})`);
+  }
+  const disposition = res.headers.get('Content-Disposition') || '';
+  const filename = /filename="([^"]+)"/.exec(disposition)?.[1] || fallbackFilename;
+
+  const url = URL.createObjectURL(await res.blob());
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  link.click();
+  URL.revokeObjectURL(url);
+}

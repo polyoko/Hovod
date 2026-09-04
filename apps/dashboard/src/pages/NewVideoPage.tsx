@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { api } from '../lib/api.js';
 import { useT } from '../lib/i18n/index.js';
 import type { AiOptions, Asset, ServerConfig } from '../lib/types.js';
+import { CategorySelect, useCategories } from '../components/CategorySelect.js';
 
 type SourceTab = 'upload' | 'import';
 type ImportPhase = 'idle' | 'creating' | 'importing' | 'processing' | 'error';
@@ -61,6 +62,7 @@ function isActiveUpload(status: UploadStatus) {
 }
 
 export function NewVideoPage() {
+  const { categories, error: categoriesError, setCategories } = useCategories();
   const navigate = useNavigate();
   const { t } = useT();
   const [sourceTab, setSourceTab] = useState<SourceTab>('upload');
@@ -69,6 +71,7 @@ export function NewVideoPage() {
   const [selectionErrors, setSelectionErrors] = useState<string[]>([]);
   const [dragOver, setDragOver] = useState(false);
   const [config, setConfig] = useState<ServerConfig | null>(null);
+  const [categoryId, setCategoryId] = useState<string | null>(null);
   const [aiOptions, setAiOptions] = useState<AiOptions>({ transcription: true, subtitles: true, chapters: true });
   const [recoveryLoaded, setRecoveryLoaded] = useState(false);
   const [importTitle, setImportTitle] = useState('');
@@ -78,6 +81,7 @@ export function NewVideoPage() {
   const inputRef = useRef<HTMLInputElement>(null);
   const itemsRef = useRef<UploadItem[]>([]);
   const activeAiOptionsRef = useRef(aiOptions);
+  const activeCategoryRef = useRef(categoryId);
 
   const replaceItems = useCallback((next: UploadItem[]) => {
     itemsRef.current = next;
@@ -162,7 +166,11 @@ export function NewVideoPage() {
       if (!assetId) {
         patchItem(localId, { status: 'creating', error: undefined, retryStage: undefined, progress: 0 });
         const created = await api<{ id: string }>('/v1/assets', {
-          method: 'POST', body: JSON.stringify({ title: initial.title.trim() || fileTitle(initial.file) }),
+          method: 'POST',
+          body: JSON.stringify({
+            title: initial.title.trim() || fileTitle(initial.file),
+            ...(activeCategoryRef.current ? { categoryId: activeCategoryRef.current } : {}),
+          }),
         });
         assetId = created.id;
         patchItem(localId, { assetId });
@@ -234,8 +242,9 @@ export function NewVideoPage() {
   const startUploadBatch = useCallback(() => {
     if (batchStarted || !itemsRef.current.some((item) => item.status === 'pending' && item.file)) return;
     activeAiOptionsRef.current = aiOptions;
+    activeCategoryRef.current = categoryId;
     setBatchStarted(true);
-  }, [aiOptions, batchStarted]);
+  }, [aiOptions, batchStarted, categoryId]);
 
   const retryItem = useCallback(async (item: UploadItem) => {
     if (item.retryStage === 'upload') {
@@ -268,7 +277,7 @@ export function NewVideoPage() {
     setImportError('');
     try {
       setImportPhase('creating');
-      const created = await api<{ id: string }>('/v1/assets', { method: 'POST', body: JSON.stringify({ title: importTitle.trim() || 'Imported video' }) });
+      const created = await api<{ id: string }>('/v1/assets', { method: 'POST', body: JSON.stringify({ title: importTitle.trim() || 'Imported video', ...(categoryId ? { categoryId } : {}) }) });
       setImportPhase('importing');
       await api(`/v1/assets/${created.id}/import`, { method: 'POST', body: JSON.stringify({ sourceUrl: importUrl }) });
       setImportPhase('processing');
@@ -279,7 +288,7 @@ export function NewVideoPage() {
       setImportPhase('error');
       setImportError(error instanceof Error ? error.message : t.common.somethingWentWrong);
     }
-  }, [aiOptions, config, importPhase, importTitle, importUrl, navigate, t]);
+  }, [aiOptions, categoryId, config, importPhase, importTitle, importUrl, navigate, t]);
 
   const isUploadBusy = items.some((item) => isActiveUpload(item.status));
   const hasPendingUploads = items.some((item) => item.status === 'pending' && item.file);
@@ -332,6 +341,18 @@ export function NewVideoPage() {
             </div>}
             {items.some((item) => item.status === 'error' && item.retryStage === 'upload' && !item.file) && <p className="mt-3 text-xs text-amber-400">{t.videos.selectFileToResume}</p>}
           </> : <div className="space-y-4"><input type="text" placeholder={t.videos.urlPlaceholder} value={importUrl} onChange={(event) => setImportUrl(event.target.value)} disabled={importWorking} className="w-full h-10 px-3 text-sm bg-zinc-900 border border-zinc-800 rounded-lg text-zinc-200 placeholder-zinc-600 outline-none focus:border-accent-500/60 transition-colors disabled:opacity-50" /><input type="text" placeholder={t.videos.enterTitle} value={importTitle} onChange={(event) => setImportTitle(event.target.value)} disabled={importWorking} className="w-full h-10 px-3 text-sm bg-zinc-900 border border-zinc-800 rounded-lg text-zinc-200 placeholder-zinc-600 outline-none focus:border-accent-500/60 transition-colors disabled:opacity-50" /></div>}
+        </div>
+
+        <div className="mb-6">
+          <label className="block text-xs font-medium text-zinc-400 mb-3">{t.categories.category}</label>
+          <CategorySelect
+            value={categoryId}
+            onChange={setCategoryId}
+            categories={categories}
+            onCreated={(created) => setCategories((prev) => [...prev, created].sort((a, b) => a.name.localeCompare(b.name)))}
+            disabled={batchStarted || importWorking}
+          />
+          {categoriesError && <p className="mt-1 text-xs text-amber-400">{t.categories.loadFailed}</p>}
         </div>
 
         {config?.aiAvailable && <div className="mb-6"><label className="block text-xs font-medium text-zinc-400 mb-3">{t.videos.aiProcessing}</label><div className="space-y-3"><Toggle label={t.videos.subtitles} description={t.videos.subtitlesDesc} checked={aiOptions.subtitles} onChange={(value) => setAiOptions({ ...aiOptions, subtitles: value, transcription: value || aiOptions.chapters })} disabled={batchStarted || importWorking} />{config.chaptersAvailable && <Toggle label={t.videos.chapters} description={t.videos.chaptersDesc} checked={aiOptions.chapters} onChange={(value) => setAiOptions({ ...aiOptions, chapters: value, transcription: value || aiOptions.subtitles })} disabled={batchStarted || importWorking} />}</div></div>}

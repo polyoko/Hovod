@@ -4,17 +4,18 @@ import path from 'node:path';
 import type { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import type { FastifyInstance } from 'fastify';
-import { and, desc, eq, inArray } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNull } from 'drizzle-orm';
 import { DeleteObjectCommand, DeleteObjectsCommand, GetObjectCommand, HeadObjectCommand, ListObjectsV2Command, PutObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { nanoid } from 'nanoid';
 import { z } from 'zod';
-import { assets, jobs, renditions, aiJobs, ASSET_STATUS, SOURCE_TYPE, JOB_STATUS, JOB_TYPE, S3_PATHS, ID_LENGTH, TIER_LIMITS, UNLIMITED_TIER_LIMITS, WEBHOOK_EVENT, METADATA_LIMITS, type OrgTier } from '@hovod/db';
+import { assets, categories, jobs, renditions, aiJobs, ASSET_STATUS, SOURCE_TYPE, JOB_STATUS, JOB_TYPE, S3_PATHS, ID_LENGTH, TIER_LIMITS, UNLIMITED_TIER_LIMITS, WEBHOOK_EVENT, METADATA_LIMITS, type OrgTier } from '@hovod/db';
 import { db } from '../db.js';
 import { env, hasStripe } from '../env.js';
 import { s3Client, s3PublicClient } from '../s3.js';
 import { enqueueTranscodeJob } from '../queue.js';
 import { findAssetOrFail, getThumbnailUrl, getSourceKey } from '../services/asset.js';
+import { findCategoryOrFail } from './categories.js';
 import { checkLimit } from '../services/metering.js';
 import { dispatchWebhook } from '../services/webhooks.js';
 import { AppError, NotFoundError } from '../middleware/error-handler.js';
@@ -31,6 +32,7 @@ const customMetadataSchema = z.record(
 const createAssetBody = z.object({
   title: z.string().min(1).max(255),
   metadata: customMetadataSchema.optional(),
+  categoryId: z.string().min(1).max(36).optional(),
 });
 const importAssetBody = z.object({
   sourceUrl: z.string().url().max(2048).refine(
@@ -49,6 +51,18 @@ const supportedUploadContentTypes = [
   'video/ogg',
 ] as const;
 const MAX_SOURCE_UPLOAD_BYTES = 50 * 1024 * 1024 * 1024;
+
+/** Sentinel `categoryId` selecting assets that have none. */
+const UNCATEGORIZED = 'uncategorized';
+// ponytail: `GET /v1/assets` has no pagination, so export inherits that ceiling.
+// Raise it behind pagination + a streaming response, not by bumping this number.
+const EXPORT_ROW_LIMIT = 10_000;
+
+/** RFC 4180 cell: quote when the value contains a comma, quote or newline. */
+function csvCell(value: string | number) {
+  const text = String(value);
+  return /[",\n\r]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+}
 
 const uploadUrlBody = z.object({
   // Optional so existing clients that always upload MP4 keep working.
@@ -188,10 +202,14 @@ export async function assetRoutes(app: FastifyInstance) {
       }
     }
 
+    // Reject a stale/foreign category before creating anything.
+    if (body.categoryId) await findCategoryOrFail(body.categoryId, request.orgId);
+
     await db.insert(assets).values({
       id,
       orgId: request.orgId!,
       title: body.title,
+      categoryId: body.categoryId ?? null,
       playbackId,
       status: ASSET_STATUS.CREATED,
       sourceType: SOURCE_TYPE.UPLOAD,
@@ -202,20 +220,54 @@ export async function assetRoutes(app: FastifyInstance) {
     return { data: { id, playbackId, status: ASSET_STATUS.CREATED } };
   });
 
-  /* List assets */
-  app.get('/v1/assets', async (request) => {
-    const list = await db
-      .select()
+  /** Assets of one org, newest first, optionally narrowed to a single category.
+   *  `uncategorized` selects the assets with no category. */
+  const listAssetsForOrg = async (orgId: string, categoryId?: string) => {
+    const filters = [eq(assets.orgId, orgId)];
+    if (categoryId === UNCATEGORIZED) filters.push(isNull(assets.categoryId));
+    else if (categoryId) filters.push(eq(assets.categoryId, categoryId));
+
+    return db
+      .select({ asset: assets, category: { id: categories.id, name: categories.name, color: categories.color } })
       .from(assets)
-      .where(eq(assets.orgId, request.orgId!))
-      .orderBy(desc(assets.createdAt));
+      .leftJoin(categories, eq(assets.categoryId, categories.id))
+      .where(and(...filters))
+      .orderBy(desc(assets.createdAt))
+      .limit(EXPORT_ROW_LIMIT + 1);
+  };
+
+  /* List assets */
+  app.get<{ Querystring: { categoryId?: string } }>('/v1/assets', async (request) => {
+    const rows = await listAssetsForOrg(request.orgId!, request.query.categoryId);
     return {
-      data: list.map((a) => ({
+      data: rows.slice(0, EXPORT_ROW_LIMIT).map(({ asset: a, category }) => ({
         ...a,
+        category: category?.id ? category : null,
         thumbnailUrl: getThumbnailUrl(a.id, a.status, a.customThumbnailKey),
         hasCustomThumbnail: !!a.customThumbnailKey,
       })),
     };
+  });
+
+  /* Export assets + their category as CSV */
+  app.get<{ Querystring: { categoryId?: string } }>('/v1/assets/export.csv', async (request, reply) => {
+    const rows = await listAssetsForOrg(request.orgId!, request.query.categoryId);
+    const truncated = rows.length > EXPORT_ROW_LIMIT;
+
+    const header = ['id', 'title', 'category', 'status', 'duration_sec', 'playback_id', 'created_at'];
+    const lines = [header.join(',')];
+    for (const { asset: a, category } of rows.slice(0, EXPORT_ROW_LIMIT)) {
+      lines.push([
+        a.id, a.title, category?.name ?? '', a.status,
+        a.durationSec ?? '', a.playbackId, a.createdAt.toISOString(),
+      ].map(csvCell).join(','));
+    }
+
+    reply.header('Content-Type', 'text/csv; charset=utf-8');
+    reply.header('Content-Disposition', `attachment; filename="videos-${new Date().toISOString().slice(0, 10)}.csv"`);
+    if (truncated) reply.header('X-Truncated', 'true');
+    // Excel opens UTF-8 CSV as latin-1 without a BOM, mangling non-ASCII titles.
+    return reply.send('\uFEFF' + lines.join('\n'));
   });
 
   /* Get asset by ID */
@@ -224,9 +276,13 @@ export async function assetRoutes(app: FastifyInstance) {
     const assetRenditions = await db.select().from(renditions).where(eq(renditions.assetId, asset.id));
     const [aiJob] = await db.select().from(aiJobs).where(eq(aiJobs.assetId, asset.id)).limit(1);
     const [activeJob] = await db.select({ currentStep: jobs.currentStep }).from(jobs).where(and(eq(jobs.assetId, asset.id), eq(jobs.status, JOB_STATUS.PROCESSING))).limit(1);
+    const [category] = asset.categoryId
+      ? await db.select({ id: categories.id, name: categories.name, color: categories.color }).from(categories).where(eq(categories.id, asset.categoryId)).limit(1)
+      : [];
     return {
       data: {
         ...asset,
+        category: category ?? null,
         thumbnailUrl: getThumbnailUrl(asset.id, asset.status, asset.customThumbnailKey),
         hasCustomThumbnail: !!asset.customThumbnailKey,
         currentStep: activeJob?.currentStep ?? null,
@@ -483,12 +539,13 @@ export async function assetRoutes(app: FastifyInstance) {
     description: z.string().max(10000).optional(),
     publicSettings: publicSettingsSchema.optional(),
     metadata: customMetadataSchema.optional(),
+    categoryId: z.string().min(1).max(36).nullable().optional(),
   });
 
   /* Update asset (title + description + public settings + metadata) */
   app.patch<{ Params: { id: string } }>('/v1/assets/:id', async (request) => {
     const body = updateAssetBody.parse(request.body);
-    if (!body.title && body.description === undefined && !body.publicSettings && body.metadata === undefined) {
+    if (!body.title && body.description === undefined && !body.publicSettings && body.metadata === undefined && body.categoryId === undefined) {
       throw new AppError(400, 'Nothing to update');
     }
     const asset = await findAssetOrFail(request.params.id, request.orgId);
@@ -497,6 +554,10 @@ export async function assetRoutes(app: FastifyInstance) {
     if (body.description !== undefined) updates.description = body.description || null;
     if (body.publicSettings) updates.publicSettings = body.publicSettings;
     if (body.metadata !== undefined) updates.customMetadata = body.metadata;
+    if (body.categoryId !== undefined) {
+      if (body.categoryId) await findCategoryOrFail(body.categoryId, request.orgId);
+      updates.categoryId = body.categoryId;
+    }
     await db.update(assets).set(updates).where(eq(assets.id, asset.id));
     return { data: { id: asset.id, ...updates } };
   });

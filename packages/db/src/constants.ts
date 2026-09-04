@@ -101,6 +101,7 @@ export const ID_LENGTH = {
   SETTINGS: 12,
   COMMENT: 16,
   REACTION: 12,
+  CATEGORY: 12,
 } as const;
 
 /** Custom metadata limits */

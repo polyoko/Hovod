@@ -60,6 +60,16 @@ export function AssetCard({ asset, onClick }: { asset: Asset; onClick: () => voi
       {/* Card body */}
       <div className="px-4 py-3">
         <p className="text-sm font-medium truncate mb-2" title={asset.title}>{asset.title}</p>
+        {asset.category && (
+          <span
+            className="inline-block max-w-full truncate text-[11px] px-2 py-0.5 mb-2 rounded-full border"
+            style={asset.category.color
+              ? { color: asset.category.color, borderColor: `${asset.category.color}55`, backgroundColor: `${asset.category.color}18` }
+              : undefined}
+          >
+            {asset.category.name}
+          </span>
+        )}
         <div className="flex items-center justify-between">
           <StatusBadge status={asset.status} />
           <div className="flex items-center gap-2">

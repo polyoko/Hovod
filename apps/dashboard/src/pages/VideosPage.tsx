@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import type { Asset } from '../lib/types.js';
-import { api } from '../lib/api.js';
+import { UNCATEGORIZED } from '../lib/types.js';
+import { api, apiDownload } from '../lib/api.js';
+import { useCategories } from '../components/CategorySelect.js';
 import { useT } from '../lib/i18n/index.js';
 import { AssetCard } from '../components/AssetCard.js';
 
@@ -9,14 +11,28 @@ export function VideosPage() {
   const navigate = useNavigate();
   const [assets, setAssets] = useState<Asset[]>([]);
   const [search, setSearch] = useState('');
+  const [categoryId, setCategoryId] = useState('');
+  const [exporting, setExporting] = useState('');
+  const { categories } = useCategories();
   const { t } = useT();
+
+  const query = categoryId ? `?categoryId=${encodeURIComponent(categoryId)}` : '';
 
   const refresh = useCallback(async () => {
     try {
-      const list = await api<Asset[]>('/v1/assets');
+      const list = await api<Asset[]>(`/v1/assets${query}`);
       setAssets(list);
     } catch { /* ignore polling errors */ }
-  }, []);
+  }, [query]);
+
+  const exportCsv = useCallback(async () => {
+    setExporting('');
+    try {
+      await apiDownload(`/v1/assets/export.csv${query}`, 'videos.csv');
+    } catch (error) {
+      setExporting(error instanceof Error ? error.message : t.common.somethingWentWrong);
+    }
+  }, [query, t]);
 
   useEffect(() => {
     refresh();
@@ -55,6 +71,25 @@ export function VideosPage() {
             {filtered.length}
           </span>
         </h2>
+        <div className="flex items-center gap-2">
+        <select
+          value={categoryId}
+          onChange={(e) => setCategoryId(e.target.value)}
+          aria-label={t.categories.category}
+          className="h-9 px-3 text-sm bg-zinc-900 border border-zinc-800 rounded-lg text-zinc-200 outline-none focus:border-accent-500/60 transition-colors"
+        >
+          <option value="">{t.categories.all}</option>
+          <option value={UNCATEGORIZED}>{t.categories.uncategorized}</option>
+          {categories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+        </select>
+        <button
+          onClick={() => void exportCsv()}
+          disabled={assets.length === 0}
+          title={t.categories.exportHint}
+          className="h-9 px-3 text-sm font-medium rounded-lg border border-zinc-800 text-zinc-300 hover:text-zinc-100 hover:border-zinc-700 disabled:opacity-40 transition-colors"
+        >
+          {t.categories.exportCsv}
+        </button>
         <input
           type="text"
           placeholder={t.videos.search}
@@ -63,7 +98,9 @@ export function VideosPage() {
           aria-label={t.videos.searchAssets}
           className="h-9 w-56 px-3 text-sm bg-zinc-900 border border-zinc-800 rounded-lg text-zinc-200 placeholder-zinc-600 outline-none focus:border-accent-500/60 transition-colors"
         />
+        </div>
       </div>
+      {exporting && <p className="mb-3 text-xs text-red-400" role="alert">{exporting}</p>}
 
       {/* Asset grid */}
       {filtered.length === 0 ? (

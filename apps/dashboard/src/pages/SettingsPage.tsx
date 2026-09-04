@@ -5,6 +5,7 @@ import { getUser } from '../lib/auth.js';
 import { useSettings, applyAccentColor } from '../lib/settings-context.js';
 import { UsageBar } from '../components/UsageBar.js';
 import { useT } from '../lib/i18n/index.js';
+import { useCategories } from '../components/CategorySelect.js';
 import type { PlatformSettings } from '../lib/types.js';
 import type { Translations } from '../lib/i18n/index.js';
 
@@ -465,6 +466,9 @@ function CloudSettings() {
       {/* Platform Settings */}
       <PlatformSettingsSection />
 
+      {/* Categories */}
+      <CategoriesSection />
+
       {/* Account */}
       {me && (
         <section className="p-5 bg-zinc-900/60 border border-zinc-800/60 rounded-xl">
@@ -638,5 +642,94 @@ export function SettingsPage() {
 
       <CloudSettings />
     </div>
+  );
+}
+
+
+/* ─── Categories ──────────────────────────────────────────── */
+
+function CategoriesSection() {
+  const { t } = useT();
+  const { categories, refresh } = useCategories();
+  const [name, setName] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+
+  async function run(action: () => Promise<unknown>) {
+    setBusy(true);
+    setError('');
+    try {
+      await action();
+      await refresh();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : t.common.somethingWentWrong);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <section className="p-5 bg-zinc-900/60 border border-zinc-800/60 rounded-xl">
+      <h2 className="text-sm font-semibold text-zinc-300 mb-1">{t.categories.title}</h2>
+      <p className="text-xs text-zinc-500 mb-4">{t.categories.subtitle}</p>
+
+      {error && <p className="mb-3 text-xs text-red-400" role="alert">{error}</p>}
+
+      <div className="flex items-center gap-2 mb-4">
+        <input
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key !== 'Enter' || !name.trim()) return;
+            e.preventDefault();
+            void run(async () => {
+              await api('/v1/categories', { method: 'POST', body: JSON.stringify({ name: name.trim() }) });
+              setName('');
+            });
+          }}
+          placeholder={t.categories.namePlaceholder}
+          aria-label={t.categories.namePlaceholder}
+          maxLength={100}
+          className="flex-1 h-9 px-3 text-sm bg-zinc-900 border border-zinc-800 rounded-lg text-zinc-200 placeholder-zinc-600 outline-none focus:border-accent-500/60 transition-colors"
+        />
+        <button
+          type="button"
+          disabled={busy || !name.trim()}
+          onClick={() => void run(async () => {
+            await api('/v1/categories', { method: 'POST', body: JSON.stringify({ name: name.trim() }) });
+            setName('');
+          })}
+          className="h-9 px-4 text-sm font-medium rounded-lg bg-accent-600 text-white hover:bg-accent-500 disabled:opacity-40 transition-colors"
+        >
+          {busy ? t.common.creating : t.common.create}
+        </button>
+      </div>
+
+      {categories.length === 0 ? (
+        <p className="text-xs text-zinc-600">{t.categories.empty}</p>
+      ) : (
+        <ul className="divide-y divide-zinc-800/60">
+          {categories.map((category) => (
+            <li key={category.id} className="flex items-center justify-between py-2.5">
+              <div className="min-w-0">
+                <div className="text-sm text-zinc-200 truncate">{category.name}</div>
+                <div className="text-[11px] text-zinc-500">{category.assetCount} {t.categories.videoCount}</div>
+              </div>
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => {
+                  if (!window.confirm(`${t.categories.deleteConfirm}\n\n${category.assetCount} ${t.categories.videoCount}`)) return;
+                  void run(() => api(`/v1/categories/${category.id}`, { method: 'DELETE' }));
+                }}
+                className="h-8 px-3 text-xs font-medium rounded-lg border border-zinc-800 text-zinc-400 hover:text-red-400 hover:border-red-500/40 disabled:opacity-40 transition-colors"
+              >
+                {t.common.delete}
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
   );
 }

@@ -1,4 +1,15 @@
-import { int, json, mysqlTable, text, timestamp, varchar, index } from 'drizzle-orm/mysql-core';
+import { int, json, mysqlTable, text, timestamp, varchar, index, uniqueIndex } from 'drizzle-orm/mysql-core';
+
+export const categories = mysqlTable('categories', {
+  id: varchar('id', { length: 36 }).primaryKey(),
+  orgId: varchar('org_id', { length: 36 }).notNull(),
+  name: varchar('name', { length: 100 }).notNull(),
+  color: varchar('color', { length: 7 }),
+  createdAt: timestamp('created_at').notNull().defaultNow(),
+  updatedAt: timestamp('updated_at').notNull().defaultNow().onUpdateNow(),
+}, (table) => ({
+  orgNameIdx: uniqueIndex('uq_categories_org_name').on(table.orgId, table.name),
+}));
 
 export const assets = mysqlTable('assets', {
   id: varchar('id', { length: 36 }).primaryKey(),
@@ -8,6 +19,7 @@ export const assets = mysqlTable('assets', {
   sourceKey: varchar('source_key', { length: 512 }),
   sourceUrl: varchar('source_url', { length: 2048 }),
   title: varchar('title', { length: 255 }).notNull(),
+  categoryId: varchar('category_id', { length: 36 }).references(() => categories.id, { onDelete: 'set null' }),
   playbackId: varchar('playback_id', { length: 64 }).notNull().unique(),
   metadata: json('metadata'),
   customMetadata: json('custom_metadata'),
@@ -21,6 +33,7 @@ export const assets = mysqlTable('assets', {
 }, (table) => ({
   statusIdx: index('idx_assets_status').on(table.status),
   orgIdIdx: index('idx_assets_org_id').on(table.orgId),
+  categoryIdx: index('idx_assets_category_id').on(table.categoryId),
 }));
 
 export const renditions = mysqlTable('renditions', {

@@ -1,3 +1,13 @@
+export interface Category {
+  id: string;
+  name: string;
+  color: string | null;
+  assetCount: number;
+}
+
+/** Sentinel category filter value selecting assets with no category. */
+export const UNCATEGORIZED = 'uncategorized';
+
 export interface Asset {
   id: string;
   title: string;
@@ -11,6 +21,8 @@ export interface Asset {
   thumbnailUrl: string | null;
   hasCustomThumbnail?: boolean;
   customMetadata?: Record<string, string> | null;
+  categoryId?: string | null;
+  category?: Pick<Category, 'id' | 'name' | 'color'> | null;
 }
 
 export interface Rendition {

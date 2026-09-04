@@ -56,6 +56,23 @@ export interface Translations {
     noAccount: string;
     haveAccount: string;
   };
+  categories: {
+    title: string;
+    subtitle: string;
+    category: string;
+    all: string;
+    uncategorized: string;
+    none: string;
+    newCategory: string;
+    namePlaceholder: string;
+    empty: string;
+    videoCount: string;
+    deleteConfirm: string;
+    loadFailed: string;
+    exportHint: string;
+    exportCsv: string;
+    exporting: string;
+  };
   videos: {
     title: string;
     subtitle: string;

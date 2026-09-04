@@ -21,6 +21,7 @@ import { settingsRoutes } from './routes/settings.js';
 import { authRoutes } from './routes/auth.js';
 import { orgRoutes } from './routes/orgs.js';
 import { commentRoutes } from './routes/comments.js';
+import { categoryRoutes } from './routes/categories.js';
 import { scheduleAnalyticsJobs, startTranscodeReconciler } from './queue.js';
 import { closeMetering } from './services/metering.js';
 
@@ -73,6 +74,7 @@ registerAuth(app);
 
 app.register(healthRoutes);
 app.register(assetRoutes);
+app.register(categoryRoutes);
 app.register(playbackRoutes);
 app.register(analyticsRoutes);
 app.register(aiRoutes);

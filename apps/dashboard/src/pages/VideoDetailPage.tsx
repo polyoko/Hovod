@@ -10,6 +10,7 @@ import { ShareModal } from '../components/ShareModal.js';
 import { VideoSettingsModal } from '../components/VideoSettingsModal.js';
 import { ThumbnailModal } from '../components/ThumbnailModal.js';
 import { useT } from '../lib/i18n/index.js';
+import { CategorySelect, useCategories } from '../components/CategorySelect.js';
 
 /** Statuses that are still changing and need polling */
 const POLL_STATUSES = new Set(['created', 'uploaded', 'queued', 'processing']);
@@ -59,6 +60,8 @@ export function VideoDetailPage() {
   const { t } = useT();
 
   const [asset, setAsset] = useState<AssetDetail | null>(null);
+  const { categories, setCategories } = useCategories();
+  const [categoryError, setCategoryError] = useState('');
   const [manifest, setManifest] = useState('');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -136,6 +139,21 @@ export function VideoDetailPage() {
       .then(setDlInfo)
       .catch(() => {});
   }, [dlOpen, dlInfo, id]);
+
+  const saveCategory = async (categoryId: string | null) => {
+    if (!id || !asset) return;
+    const category = categoryId ? categories.find((c) => c.id === categoryId) ?? null : null;
+    const previous = { categoryId: asset.categoryId ?? null, category: asset.category ?? null };
+    // Optimistic: the picker is the only writer of this field on this page.
+    setAsset((prev) => prev ? { ...prev, categoryId, category } : prev);
+    setCategoryError('');
+    try {
+      await api(`/v1/assets/${id}`, { method: 'PATCH', body: JSON.stringify({ categoryId }) });
+    } catch (error) {
+      setAsset((prev) => prev ? { ...prev, ...previous } : prev);
+      setCategoryError(error instanceof Error ? error.message : t.common.somethingWentWrong);
+    }
+  };
 
   const saveMetadata = async (newMeta: Record<string, string>) => {
     if (!id) return;
@@ -443,6 +461,16 @@ export function VideoDetailPage() {
                   <div className="text-[10px] text-zinc-500">{t.videoDetail.created}</div>
                 </div>
               </div>
+            </div>
+            <div className="mt-4">
+              <div className="text-[10px] text-zinc-500 mb-1.5">{t.categories.category}</div>
+              <CategorySelect
+                value={asset.categoryId ?? null}
+                onChange={(next) => void saveCategory(next)}
+                categories={categories}
+                onCreated={(created) => setCategories((prev) => [...prev, created].sort((a, b) => a.name.localeCompare(b.name)))}
+              />
+              {categoryError && <p className="mt-1 text-xs text-red-400" role="alert">{categoryError}</p>}
             </div>
             <div className="flex items-center gap-2.5 mt-4">
               <div className="w-8 h-8 rounded-lg bg-zinc-800/80 flex items-center justify-center shrink-0">

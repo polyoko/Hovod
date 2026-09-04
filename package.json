@@ -8,7 +8,14 @@
     "type": "git",
     "url": "https://github.com/Synapsr/Hovod.git"
   },
-  "keywords": ["video", "streaming", "vod", "hls", "transcoding", "self-hosted"],
+  "keywords": [
+    "video",
+    "streaming",
+    "vod",
+    "hls",
+    "transcoding",
+    "self-hosted"
+  ],
   "engines": {
     "node": ">=20"
   },
@@ -18,8 +25,12 @@
   ],
   "scripts": {
     "build": "npm run build -w @hovod/db && npm run build -w @hovod/api && npm run build -w @hovod/worker && npm run build -w @hovod/dashboard",
-    "dev": "echo 'Use app-level dev commands — see CLAUDE.md'",
+    "dev": "echo 'Use app-level dev commands \u2014 see CLAUDE.md'",
     "lint": "npm run -ws lint",
-    "typecheck": "npm run -ws typecheck"
+    "typecheck": "npm run -ws typecheck",
+    "e2e": "playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.49.0"
   }
 }
