@@ -1,6 +1,13 @@
 @import "tailwindcss";
 @plugin "@tailwindcss/typography";
 
+html,
+body,
+#root {
+  min-height: 100%;
+  background-color: #09090b;
+}
+
 /* ─── Dynamic accent color (set via JS from platform settings) ── */
 
 :root {

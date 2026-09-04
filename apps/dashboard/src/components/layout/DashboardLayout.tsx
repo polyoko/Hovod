@@ -10,10 +10,10 @@ export function DashboardLayout() {
   const { t } = useT();
 
   return (
-    <div className="flex h-screen bg-zinc-950 text-zinc-50">
+    <div className="flex h-dvh min-h-0 overflow-hidden bg-zinc-950 text-zinc-50">
       <Sidebar mobileOpen={mobileOpen} onClose={() => setMobileOpen(false)} />
 
-      <div className="flex-1 flex flex-col min-w-0">
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col">
         {/* Mobile header */}
         <header className="lg:hidden sticky top-0 z-20 flex items-center h-14 px-4 bg-zinc-950/80 backdrop-blur-md border-b border-zinc-800/60">
           <button
@@ -42,7 +42,7 @@ export function DashboardLayout() {
         </header>
 
         {/* Main content */}
-        <main className="flex-1 overflow-y-auto">
+        <main className="min-h-0 flex-1 overflow-y-auto">
           <div className="max-w-6xl mx-auto px-6 py-8">
             <Outlet />
           </div>

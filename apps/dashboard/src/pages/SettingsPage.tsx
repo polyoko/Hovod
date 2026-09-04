@@ -413,11 +413,11 @@ function PlatformSettingsSection() {
 
       {/* Save */}
       {hasChanges && (
-        <div className="flex justify-end">
+        <div className="sticky bottom-4 z-10 flex justify-end rounded-xl border border-zinc-700/80 bg-zinc-950/95 p-3 shadow-xl backdrop-blur">
           <button
             onClick={save}
             disabled={saving}
-            className="h-9 px-5 text-sm font-medium rounded-lg bg-accent-600 text-white hover:bg-accent-500 transition-colors disabled:opacity-50"
+            className="h-9 px-5 text-sm font-medium rounded-lg bg-accent-600 text-white hover:bg-accent-500 transition-colors focus:outline-none focus:ring-2 focus:ring-accent-400 focus:ring-offset-2 focus:ring-offset-zinc-950 disabled:opacity-50"
           >
             {saving ? t.common.saving : t.common.saveChanges}
           </button>
