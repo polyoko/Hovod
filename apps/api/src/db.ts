@@ -245,6 +245,22 @@ export async function runMigrations() {
     )
   `);
 
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS asset_source_cleanup_tasks (
+      id VARCHAR(36) PRIMARY KEY,
+      asset_id VARCHAR(36) NOT NULL UNIQUE,
+      org_id VARCHAR(36) NOT NULL,
+      status VARCHAR(32) NOT NULL DEFAULT 'queued',
+      attempts INT NOT NULL DEFAULT 0,
+      last_error VARCHAR(1024) NULL,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      INDEX idx_asct_status (status),
+      INDEX idx_asct_org_id (org_id),
+      CONSTRAINT fk_asct_asset FOREIGN KEY (asset_id) REFERENCES assets(id) ON DELETE CASCADE
+    )
+  `);
+
   /* ─── Auth & Organization tables ─────────────────────────── */
 
   await pool.query(`
@@ -317,6 +333,7 @@ export async function runMigrations() {
       logo_key VARCHAR(512) NULL,
       ai_auto_transcribe VARCHAR(5) NOT NULL DEFAULT 'true',
       ai_auto_chapter VARCHAR(5) NOT NULL DEFAULT 'true',
+      keep_original_source_files VARCHAR(5) NOT NULL DEFAULT 'true',
       created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
       updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
       INDEX idx_settings_org_id (org_id),
@@ -324,6 +341,9 @@ export async function runMigrations() {
       CONSTRAINT fk_settings_org FOREIGN KEY (org_id) REFERENCES organizations(id) ON DELETE CASCADE
     )
   `);
+  await pool.query(`
+    ALTER TABLE settings ADD COLUMN keep_original_source_files VARCHAR(5) NOT NULL DEFAULT 'true' AFTER ai_auto_chapter
+  `).catch(() => { /* column already exists */ });
 
   /* ─── Comments table ────────────────────────────────────── */
 

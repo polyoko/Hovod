@@ -247,6 +247,10 @@ export const de: Translations = {
     failedUpdateName: 'Name konnte nicht aktualisiert werden',
     failedCheckout: 'Checkout konnte nicht gestartet werden',
     failedPortal: 'Abrechnungsportal konnte nicht geöffnet werden',
+    storageDesc: 'Steuern Sie, wie lange hochgeladene Quelldateien im Objektspeicher bleiben.',
+    keepOriginalSourceFiles: 'Original-Quelldateien behalten',
+    keepOriginalSourceFilesDesc: 'Ermöglicht Original-Downloads und Wiederholungen fehlgeschlagener Verarbeitungen.',
+    keepOriginalSourceFilesWarning: 'Videos, die nach dem Speichern fertig werden, behalten keine Originaldatei. Bestehende Originale bleiben unverändert.',
   },
   apiKeys: {
     title: 'API-Schlüssel',

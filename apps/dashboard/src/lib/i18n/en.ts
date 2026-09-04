@@ -250,6 +250,10 @@ export const en: Translations = {
     failedUpdateName: 'Failed to update name',
     failedCheckout: 'Failed to start checkout',
     failedPortal: 'Failed to open billing portal',
+    storageDesc: 'Control how long uploaded source files remain in object storage.',
+    keepOriginalSourceFiles: 'Keep original source files',
+    keepOriginalSourceFilesDesc: 'Keeps original downloads and lets failed processing be retried.',
+    keepOriginalSourceFilesWarning: 'New videos completed after saving will not keep their original file. Existing originals are unchanged.',
   },
   apiKeys: {
     title: 'API Keys',

@@ -21,6 +21,7 @@ function formatRow(row: typeof settings.$inferSelect) {
     logoUrl: row.logoKey ? `${env.S3_PUBLIC_BASE_URL}/${row.logoKey}` : null,
     aiAutoTranscribe: row.aiAutoTranscribe === 'true',
     aiAutoChapter: row.aiAutoChapter === 'true',
+    keepOriginalSourceFiles: row.keepOriginalSourceFiles === 'true',
   };
 }
 
@@ -37,6 +38,7 @@ async function ensureSettingsRow(orgId: string | null | undefined) {
     theme: DEFAULT_SETTINGS.THEME,
     aiAutoTranscribe: String(DEFAULT_SETTINGS.AI_AUTO_TRANSCRIBE),
     aiAutoChapter: String(DEFAULT_SETTINGS.AI_AUTO_CHAPTER),
+    keepOriginalSourceFiles: 'true',
   });
   const [row] = await db.select().from(settings).where(condition).limit(1);
   return row!;
@@ -49,6 +51,7 @@ const updateBody = z.object({
   theme: z.enum(['light', 'dark']).optional(),
   aiAutoTranscribe: z.boolean().optional(),
   aiAutoChapter: z.boolean().optional(),
+  keepOriginalSourceFiles: z.boolean().optional(),
 });
 
 /* ─── Routes ─────────────────────────────────────────────── */
@@ -83,6 +86,7 @@ export async function settingsRoutes(app: FastifyInstance) {
     if (body.theme !== undefined) updates.theme = body.theme;
     if (body.aiAutoTranscribe !== undefined) updates.aiAutoTranscribe = String(body.aiAutoTranscribe);
     if (body.aiAutoChapter !== undefined) updates.aiAutoChapter = String(body.aiAutoChapter);
+    if (body.keepOriginalSourceFiles !== undefined) updates.keepOriginalSourceFiles = String(body.keepOriginalSourceFiles);
 
     if (Object.keys(updates).length > 0) {
       await db.update(settings).set(updates).where(eq(settings.id, row.id));

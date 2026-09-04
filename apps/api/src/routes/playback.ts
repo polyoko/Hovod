@@ -102,7 +102,7 @@ export async function playbackRoutes(app: FastifyInstance) {
 
     const ps = asset.publicSettings as Record<string, boolean> | null;
     if (!ps?.allowDownload) throw new AppError(403, 'Download is not enabled for this video');
-    if (!asset.sourceKey) throw new NotFoundError('No source file available');
+    if (!asset.sourceKey) throw new AppError(404, 'Original source file is not available', 'ORIGINAL_SOURCE_NOT_AVAILABLE');
 
     const command = new GetObjectCommand({
       Bucket: env.S3_BUCKET,

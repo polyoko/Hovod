@@ -104,6 +104,7 @@ export const ID_LENGTH = {
   CATEGORY: 12,
   DELETION_TASK: 12,
   DELETION_COMMAND: 16,
+  SOURCE_CLEANUP_TASK: 12,
 } as const;
 
 /** Durable cleanup states for assets hidden from the product. */
@@ -114,6 +115,15 @@ export const DELETION_TASK_STATUS = {
 } as const;
 
 export type DeletionTaskStatus = (typeof DELETION_TASK_STATUS)[keyof typeof DELETION_TASK_STATUS];
+
+/** Cleanup state for originals that must no longer be retained. */
+export const SOURCE_CLEANUP_TASK_STATUS = {
+  QUEUED: 'queued',
+  PROCESSING: 'processing',
+  FAILED: 'failed',
+} as const;
+
+export type SourceCleanupTaskStatus = (typeof SOURCE_CLEANUP_TASK_STATUS)[keyof typeof SOURCE_CLEANUP_TASK_STATUS];
 
 /** Custom metadata limits */
 export const METADATA_LIMITS = {

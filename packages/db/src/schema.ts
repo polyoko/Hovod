@@ -113,6 +113,21 @@ export const assetDeletionCommands = mysqlTable('asset_deletion_commands', {
   orgKeyIdx: uniqueIndex('uq_asset_deletion_commands_org_key').on(table.orgId, table.idempotencyKey),
 }));
 
+/** Durable source-object purge after a ready asset opts out of retention. */
+export const assetSourceCleanupTasks = mysqlTable('asset_source_cleanup_tasks', {
+  id: varchar('id', { length: 36 }).primaryKey(),
+  assetId: varchar('asset_id', { length: 36 }).notNull().unique().references(() => assets.id, { onDelete: 'cascade' }),
+  orgId: varchar('org_id', { length: 36 }).notNull(),
+  status: varchar('status', { length: 32 }).notNull().default('queued'),
+  attempts: int('attempts').notNull().default(0),
+  lastError: varchar('last_error', { length: 1024 }),
+  createdAt: timestamp('created_at').notNull().defaultNow(),
+  updatedAt: timestamp('updated_at').notNull().defaultNow().onUpdateNow(),
+}, (table) => ({
+  statusIdx: index('idx_asset_source_cleanup_tasks_status').on(table.status),
+  orgIdIdx: index('idx_asset_source_cleanup_tasks_org_id').on(table.orgId),
+}));
+
 /* ─── Analytics tables ───────────────────────────────────── */
 
 export const analyticsEvents = mysqlTable('analytics_events', {
@@ -179,6 +194,7 @@ export const settings = mysqlTable('settings', {
   logoKey: varchar('logo_key', { length: 512 }),
   aiAutoTranscribe: varchar('ai_auto_transcribe', { length: 5 }).notNull().default('true'),
   aiAutoChapter: varchar('ai_auto_chapter', { length: 5 }).notNull().default('true'),
+  keepOriginalSourceFiles: varchar('keep_original_source_files', { length: 5 }).notNull().default('true'),
   createdAt: timestamp('created_at').notNull().defaultNow(),
   updatedAt: timestamp('updated_at').notNull().defaultNow().onUpdateNow(),
 }, (table) => ({

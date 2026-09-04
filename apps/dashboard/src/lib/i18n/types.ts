@@ -247,6 +247,10 @@ export interface Translations {
     failedUpdateName: string;
     failedCheckout: string;
     failedPortal: string;
+    storageDesc: string;
+    keepOriginalSourceFiles: string;
+    keepOriginalSourceFilesDesc: string;
+    keepOriginalSourceFilesWarning: string;
   };
   apiKeys: {
     title: string;

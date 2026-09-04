@@ -1,6 +1,6 @@
 import { Queue, type JobsOptions } from 'bullmq';
 import { and, eq } from 'drizzle-orm';
-import { assetDeletionTasks, jobs, DELETION_TASK_STATUS, JOB_STATUS, JOB_TYPE } from '@hovod/db';
+import { assetDeletionTasks, assetSourceCleanupTasks, jobs, DELETION_TASK_STATUS, JOB_STATUS, JOB_TYPE, SOURCE_CLEANUP_TASK_STATUS } from '@hovod/db';
 import { db } from './db.js';
 import { env } from './env.js';
 
@@ -106,6 +106,46 @@ export function startAssetDeletionReconciler(intervalMs = 30_000): () => void {
       })
       .catch((error) => console.warn('[queue] Asset deletion reconciliation failed:', (error as Error).message));
   };
+  run();
+  const timer = setInterval(run, intervalMs);
+  timer.unref();
+  return () => clearInterval(timer);
+}
+
+export const sourceCleanupQueue = new Queue('source-cleanup', {
+  connection: { url: env.REDIS_URL },
+});
+
+export const SOURCE_CLEANUP_JOB_OPTIONS: Omit<JobsOptions, 'jobId'> = {
+  attempts: 3,
+  backoff: { type: 'exponential', delay: 1_000 },
+};
+
+export async function enqueueSourceCleanupTask(taskId: string, assetId: string) {
+  return sourceCleanupQueue.add('source-cleanup', { taskId, assetId }, {
+    ...SOURCE_CLEANUP_JOB_OPTIONS,
+    jobId: taskId,
+  });
+}
+
+/** Re-deliver source cleanup work committed by a worker while Redis was down. */
+export async function reconcileSourceCleanupTasks(): Promise<number> {
+  const queuedTasks = await db.select({ id: assetSourceCleanupTasks.id, assetId: assetSourceCleanupTasks.assetId })
+    .from(assetSourceCleanupTasks)
+    .where(eq(assetSourceCleanupTasks.status, SOURCE_CLEANUP_TASK_STATUS.QUEUED));
+  let enqueued = 0;
+  for (const task of queuedTasks) {
+    if (await sourceCleanupQueue.getJob(task.id)) continue;
+    await enqueueSourceCleanupTask(task.id, task.assetId);
+    enqueued += 1;
+  }
+  return enqueued;
+}
+
+export function startSourceCleanupReconciler(intervalMs = 30_000): () => void {
+  const run = () => reconcileSourceCleanupTasks()
+    .then((count) => { if (count > 0) console.info(`[queue] Reconciled ${count} source cleanup task(s)`); })
+    .catch((error) => console.warn('[queue] Source cleanup reconciliation failed:', (error as Error).message));
   run();
   const timer = setInterval(run, intervalMs);
   timer.unref();

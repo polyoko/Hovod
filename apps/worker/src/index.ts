@@ -6,12 +6,12 @@ import path from 'node:path';
 import os from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { DeleteObjectsCommand, GetObjectCommand, ListObjectsV2Command, PutObjectCommand } from '@aws-sdk/client-s3';
-import { UnrecoverableError, Worker } from 'bullmq';
+import { Queue, UnrecoverableError, Worker } from 'bullmq';
 import { eq, and } from 'drizzle-orm';
 import { z } from 'zod';
 import { Redis } from 'ioredis';
 import { nanoid } from 'nanoid';
-import { assetDeletionTasks, analyticsAssetStats, analyticsDaily, analyticsEvents, assets, organizations, settings, aiJobs, createDb, jobs, renditions, ASSET_STATUS, DELETION_TASK_STATUS, JOB_STATUS, AI_JOB_STATUS, S3_PATHS, ID_LENGTH, WEBHOOK_EVENT, PROCESSING_STEP } from '@hovod/db';
+import { assetDeletionTasks, assetSourceCleanupTasks, analyticsAssetStats, analyticsDaily, analyticsEvents, assets, organizations, settings, aiJobs, createDb, jobs, renditions, ASSET_STATUS, DELETION_TASK_STATUS, SOURCE_CLEANUP_TASK_STATUS, JOB_STATUS, AI_JOB_STATUS, S3_PATHS, ID_LENGTH, WEBHOOK_EVENT, PROCESSING_STEP } from '@hovod/db';
 import { isNull } from 'drizzle-orm';
 import { env } from './env.js';
 import { createAnalyticsWorker } from './analytics-worker.js';
@@ -39,6 +39,11 @@ const jobDataSchema = z.object({
 });
 
 const deletionJobDataSchema = z.object({
+  taskId: z.string().min(1).max(36),
+  assetId: z.string().min(1).max(36),
+});
+
+const sourceCleanupJobDataSchema = z.object({
   taskId: z.string().min(1).max(36),
   assetId: z.string().min(1).max(36),
 });
@@ -97,6 +102,16 @@ const { db } = createDb(env.DATABASE_URL, {
 
 const redis = new Redis(env.REDIS_URL, { maxRetriesPerRequest: 3, lazyConnect: true });
 redis.connect().catch(() => { /* non-fatal */ });
+
+const sourceCleanupQueue = new Queue('source-cleanup', { connection: { url: env.REDIS_URL } });
+const SOURCE_CLEANUP_JOB_OPTIONS = { attempts: 3, backoff: { type: 'exponential' as const, delay: 1_000 } };
+
+async function enqueueSourceCleanupTask(taskId: string, assetId: string) {
+  return sourceCleanupQueue.add('source-cleanup', { taskId, assetId }, {
+    ...SOURCE_CLEANUP_JOB_OPTIONS,
+    jobId: taskId,
+  });
+}
 
 async function trackEncoding(orgId: string | null, durationSec: number): Promise<void> {
   if (!orgId) return;
@@ -290,9 +305,37 @@ const worker = new Worker(
       console.log('[worker] Uploading to S3...');
       await uploadDirectory(outputDir, `${S3_PATHS.PLAYBACK_PREFIX}/${assetId}`);
 
-      /* Mark as ready */
-      await db.update(assets).set({ status: ASSET_STATUS.READY, durationSec: Math.round(probe.duration), errorMessage: null }).where(eq(assets.id, assetId));
+      /* Mark as ready and durably request source cleanup when this org has
+       * opted out of original retention. The task can safely run while AI
+       * enrichment uses the local source file. */
+      let keepOriginalSourceFiles = true;
+      try {
+        const condition = asset.orgId ? eq(settings.orgId, asset.orgId) : isNull(settings.orgId);
+        const [settingsRow] = await db.select({ keepOriginalSourceFiles: settings.keepOriginalSourceFiles })
+          .from(settings).where(condition).limit(1);
+        keepOriginalSourceFiles = settingsRow?.keepOriginalSourceFiles !== 'false';
+      } catch { /* preserve originals if settings are temporarily unavailable */ }
+
+      const sourceCleanupTaskId = !keepOriginalSourceFiles && asset.sourceKey
+        ? nanoid(ID_LENGTH.SOURCE_CLEANUP_TASK)
+        : null;
+      await db.transaction(async (tx) => {
+        await tx.update(assets).set({ status: ASSET_STATUS.READY, durationSec: Math.round(probe.duration), errorMessage: null }).where(eq(assets.id, assetId));
+        if (sourceCleanupTaskId) {
+          await tx.insert(assetSourceCleanupTasks).values({
+            id: sourceCleanupTaskId,
+            assetId,
+            orgId: asset.orgId,
+            status: SOURCE_CLEANUP_TASK_STATUS.QUEUED,
+            attempts: 0,
+          });
+        }
+      });
       await db.update(jobs).set({ status: JOB_STATUS.COMPLETED, currentStep: null }).where(eq(jobs.id, jobId));
+      if (sourceCleanupTaskId) {
+        await enqueueSourceCleanupTask(sourceCleanupTaskId, assetId)
+          .catch((error) => console.warn(`[source-cleanup] Task ${sourceCleanupTaskId} will be reconciled:`, (error as Error).message));
+      }
 
       /* AI Processing — non-blocking enrichment (asset is already READY) */
       const meta = asset.metadata ? (typeof asset.metadata === 'string' ? JSON.parse(asset.metadata as string) : asset.metadata) as Record<string, unknown> : {};
@@ -339,7 +382,7 @@ const worker = new Worker(
       }, asset.orgId).catch(() => {});
 
       /* Upload original source to S3 for download feature */
-      if (asset.sourceKey) {
+      if (asset.sourceKey && keepOriginalSourceFiles) {
         try {
           console.log('[worker] Uploading source to S3 for archival...');
           await s3.send(new PutObjectCommand({
@@ -489,6 +532,69 @@ assetDeletionWorker.on('failed', (job, err) => {
   console.error(`[asset-deletion] Task ${job?.id} failed:`, err.message);
 });
 
+/* ─── Original source cleanup worker ──────────────────────── */
+
+const sourceCleanupWorker = new Worker(
+  'source-cleanup',
+  async (job) => {
+    const { taskId, assetId } = sourceCleanupJobDataSchema.parse(job.data);
+    const [task] = await db.select().from(assetSourceCleanupTasks).where(eq(assetSourceCleanupTasks.id, taskId)).limit(1);
+    if (!task) return;
+    const [asset] = await db.select().from(assets).where(eq(assets.id, assetId)).limit(1);
+    if (!asset) return;
+    if (!asset.sourceKey) {
+      await db.delete(assetSourceCleanupTasks).where(eq(assetSourceCleanupTasks.id, taskId));
+      return;
+    }
+    const sourceKey = asset.sourceKey;
+
+    await db.update(assetSourceCleanupTasks).set({
+      status: SOURCE_CLEANUP_TASK_STATUS.PROCESSING,
+      attempts: job.attemptsMade + 1,
+      lastError: null,
+    }).where(eq(assetSourceCleanupTasks.id, taskId));
+
+    try {
+      const prefix = `${S3_PATHS.SOURCES_PREFIX}/${assetId}/`;
+      let continuationToken: string | undefined;
+      do {
+        const list = await s3.send(new ListObjectsV2Command({
+          Bucket: env.S3_BUCKET,
+          Prefix: prefix,
+          ContinuationToken: continuationToken,
+        }));
+        if (list.Contents?.length) {
+          await s3.send(new DeleteObjectsCommand({
+            Bucket: env.S3_BUCKET,
+            Delete: { Objects: list.Contents.flatMap((object) => object.Key ? [{ Key: object.Key }] : []) },
+          }));
+        }
+        continuationToken = list.IsTruncated ? list.NextContinuationToken : undefined;
+      } while (continuationToken);
+
+      await db.transaction(async (tx) => {
+        await tx.update(assets).set({ sourceKey: null }).where(and(eq(assets.id, assetId), eq(assets.sourceKey, sourceKey)));
+        await tx.delete(assetSourceCleanupTasks).where(eq(assetSourceCleanupTasks.id, taskId));
+      });
+    } catch (error) {
+      const message = sanitizeErrorMessage(error);
+      const maximumAttempts = typeof job.opts.attempts === 'number' ? job.opts.attempts : 1;
+      const terminal = job.attemptsMade + 1 >= maximumAttempts;
+      await db.update(assetSourceCleanupTasks).set({
+        status: terminal ? SOURCE_CLEANUP_TASK_STATUS.FAILED : SOURCE_CLEANUP_TASK_STATUS.QUEUED,
+        attempts: job.attemptsMade + 1,
+        lastError: message,
+      }).where(eq(assetSourceCleanupTasks.id, taskId));
+      throw terminal ? new UnrecoverableError(message) : error;
+    }
+  },
+  { connection: { url: env.REDIS_URL }, concurrency: 2 },
+);
+
+sourceCleanupWorker.on('failed', (job, err) => {
+  console.error(`[source-cleanup] Task ${job?.id} failed:`, err.message);
+});
+
 /* ─── Analytics Worker ────────────────────────────────────── */
 
 const analyticsWorker = createAnalyticsWorker(env.REDIS_URL);
@@ -496,7 +602,7 @@ const analyticsWorker = createAnalyticsWorker(env.REDIS_URL);
 /* Graceful shutdown */
 async function shutdown(signal: string) {
   console.log(`[worker] Received ${signal}, shutting down...`);
-  await Promise.all([worker.close(), assetDeletionWorker.close(), analyticsWorker.close(), redis.quit()]);
+  await Promise.all([worker.close(), assetDeletionWorker.close(), sourceCleanupWorker.close(), sourceCleanupQueue.close(), analyticsWorker.close(), redis.quit()]);
   process.exit(0);
 }
 

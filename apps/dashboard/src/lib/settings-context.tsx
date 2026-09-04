@@ -8,6 +8,7 @@ const DEFAULT_SETTINGS: PlatformSettings = {
   logoUrl: null,
   aiAutoTranscribe: true,
   aiAutoChapter: true,
+  keepOriginalSourceFiles: true,
 };
 
 interface SettingsContextValue {

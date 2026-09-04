@@ -247,6 +247,10 @@ export const es: Translations = {
     failedUpdateName: 'Error al actualizar el nombre',
     failedCheckout: 'Error al iniciar el pago',
     failedPortal: 'Error al abrir el portal de facturación',
+    storageDesc: 'Controla cuánto tiempo permanecen los archivos de origen en el almacenamiento de objetos.',
+    keepOriginalSourceFiles: 'Conservar archivos de origen originales',
+    keepOriginalSourceFilesDesc: 'Mantiene las descargas originales y permite reintentar procesamientos fallidos.',
+    keepOriginalSourceFilesWarning: 'Los videos terminados después de guardar no conservarán su archivo original. Los originales existentes no cambian.',
   },
   apiKeys: {
     title: 'Claves API',

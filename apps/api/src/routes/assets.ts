@@ -731,7 +731,7 @@ export async function assetRoutes(app: FastifyInstance) {
     }
 
     // Download original source
-    if (!asset.sourceKey) throw new NotFoundError('No source file available');
+    if (!asset.sourceKey) throw new AppError(404, 'Original source file is not available', 'ORIGINAL_SOURCE_NOT_AVAILABLE');
 
     const [headResult, downloadUrl] = await Promise.all([
       s3Client.send(new HeadObjectCommand({ Bucket: env.S3_BUCKET, Key: asset.sourceKey })).catch(() => null),

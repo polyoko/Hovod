@@ -247,6 +247,10 @@ export const fr: Translations = {
     failedUpdateName: 'Échec de la mise à jour du nom',
     failedCheckout: 'Échec du lancement du paiement',
     failedPortal: "Échec de l'ouverture du portail de facturation",
+    storageDesc: 'Contrôlez la conservation des fichiers source importés dans le stockage objet.',
+    keepOriginalSourceFiles: 'Conserver les fichiers source originaux',
+    keepOriginalSourceFilesDesc: 'Permet le téléchargement original et la reprise d’un traitement en échec.',
+    keepOriginalSourceFilesWarning: 'Les vidéos terminées après l’enregistrement ne conserveront pas leur original. Les originaux existants ne changent pas.',
   },
   apiKeys: {
     title: 'Clés API',

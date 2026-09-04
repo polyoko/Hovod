@@ -143,6 +143,7 @@ export interface PlatformSettings {
   logoUrl: string | null;
   aiAutoTranscribe: boolean;
   aiAutoChapter: boolean;
+  keepOriginalSourceFiles: boolean;
 }
 
 /* ─── Organization ───────────────────────────────────────── */

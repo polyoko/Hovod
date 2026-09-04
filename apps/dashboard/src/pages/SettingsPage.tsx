@@ -101,6 +101,7 @@ function PlatformSettingsSection() {
   const [theme, setTheme] = useState(settings.theme);
   const [aiAutoTranscribe, setAiAutoTranscribe] = useState(settings.aiAutoTranscribe);
   const [aiAutoChapter, setAiAutoChapter] = useState(settings.aiAutoChapter);
+  const [keepOriginalSourceFiles, setKeepOriginalSourceFiles] = useState(settings.keepOriginalSourceFiles);
   const [saving, setSaving] = useState(false);
   const [uploadingLogo, setUploadingLogo] = useState(false);
   const [error, setError] = useState('');
@@ -112,13 +113,15 @@ function PlatformSettingsSection() {
     setTheme(settings.theme);
     setAiAutoTranscribe(settings.aiAutoTranscribe);
     setAiAutoChapter(settings.aiAutoChapter);
+    setKeepOriginalSourceFiles(settings.keepOriginalSourceFiles);
   }, [settings]);
 
   const hasChanges =
     primaryColor !== settings.primaryColor ||
     theme !== settings.theme ||
     aiAutoTranscribe !== settings.aiAutoTranscribe ||
-    aiAutoChapter !== settings.aiAutoChapter;
+    aiAutoChapter !== settings.aiAutoChapter ||
+    keepOriginalSourceFiles !== settings.keepOriginalSourceFiles;
 
   const handleColorChange = (color: string) => {
     setPrimaryColor(color);
@@ -132,7 +135,7 @@ function PlatformSettingsSection() {
     try {
       await api<PlatformSettings>('/v1/settings', {
         method: 'PATCH',
-        body: JSON.stringify({ primaryColor, theme, aiAutoTranscribe, aiAutoChapter }),
+        body: JSON.stringify({ primaryColor, theme, aiAutoTranscribe, aiAutoChapter, keepOriginalSourceFiles }),
       });
       await refetch();
       setSuccess(t.settings.settingsSaved);
@@ -338,6 +341,20 @@ function PlatformSettingsSection() {
             </div>
             <Toggle checked={aiAutoChapter} onChange={setAiAutoChapter} />
           </div>
+        </div>
+      </section>
+
+      {/* Original source retention */}
+      <section className="p-5 bg-zinc-900/60 border border-zinc-800/60 rounded-xl">
+        <h2 className="text-sm font-semibold text-zinc-300 mb-1">{t.settings.storage}</h2>
+        <p className="text-xs text-zinc-600 mb-5">{t.settings.storageDesc}</p>
+        <div className="flex items-center justify-between gap-4">
+          <div>
+            <p className="text-sm text-zinc-200">{t.settings.keepOriginalSourceFiles}</p>
+            <p className="text-xs text-zinc-500 mt-0.5">{t.settings.keepOriginalSourceFilesDesc}</p>
+            {!keepOriginalSourceFiles && <p className="text-xs text-amber-400 mt-2">{t.settings.keepOriginalSourceFilesWarning}</p>}
+          </div>
+          <Toggle checked={keepOriginalSourceFiles} onChange={setKeepOriginalSourceFiles} />
         </div>
       </section>
 
