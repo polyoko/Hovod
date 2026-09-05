@@ -55,12 +55,13 @@ export async function dispatchWebhook(
   await Promise.allSettled(
     urls.map(async (url) => {
       try {
-        await fetch(url, {
+        const response = await fetch(url, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body,
           signal: AbortSignal.timeout(TIMEOUT_MS),
         });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
       } catch (err) {
         console.warn(`[webhook] Failed to deliver ${event} to ${url}: ${(err as Error).message}`);
       }

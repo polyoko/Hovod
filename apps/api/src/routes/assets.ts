@@ -10,7 +10,7 @@ import { DeleteObjectCommand, GetObjectCommand, HeadObjectCommand, PutObjectComm
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { nanoid } from 'nanoid';
 import { z } from 'zod';
-import { assetDeletionCommands, assetDeletionTasks, assets, categories, jobs, renditions, aiJobs, ASSET_STATUS, DELETION_TASK_STATUS, SOURCE_TYPE, JOB_STATUS, JOB_TYPE, S3_PATHS, ID_LENGTH, TIER_LIMITS, UNLIMITED_TIER_LIMITS, METADATA_LIMITS, type OrgTier } from '@hovod/db';
+import { assetDeletionCommands, assetDeletionTasks, assets, categories, jobs, renditions, aiJobs, ASSET_STATUS, DELETION_TASK_STATUS, SOURCE_TYPE, JOB_STATUS, JOB_TYPE, S3_PATHS, ID_LENGTH, TIER_LIMITS, UNLIMITED_TIER_LIMITS, METADATA_LIMITS, WEBHOOK_EVENT, type OrgTier } from '@hovod/db';
 import { db } from '../db.js';
 import { env, hasStripe } from '../env.js';
 import { s3Client, s3PublicClient } from '../s3.js';
@@ -20,6 +20,7 @@ import { findCategoryOrFail } from './categories.js';
 import { checkLimit } from '../services/metering.js';
 import { AppError, NotFoundError } from '../middleware/error-handler.js';
 import { generateVttFromSegments } from '../services/vtt.js';
+import { dispatchWebhook } from '../services/webhooks.js';
 
 const customMetadataSchema = z.record(
   z.string().min(1).max(METADATA_LIMITS.MAX_KEY_LENGTH),
@@ -140,11 +141,12 @@ export async function assetRoutes(app: FastifyInstance) {
     }
 
     const result = await db.transaction(async (tx) => {
-      const candidates = await tx.select({ id: assets.id, status: assets.status })
+      const candidates = await tx.select({ id: assets.id, status: assets.status, title: assets.title })
         .from(assets)
         .where(and(eq(assets.orgId, orgId), inArray(assets.id, assetIds)));
       const byId = new Map(candidates.map((asset) => [asset.id, asset]));
       const acceptedIds: string[] = [];
+      const deletedAssets: Array<{ id: string; title: string }> = [];
       const rejected: BulkDeleteResult['rejected'] = [];
       const deletionTaskIds: string[] = [];
 
@@ -178,6 +180,7 @@ export async function assetRoutes(app: FastifyInstance) {
           attempts: 0,
         });
         acceptedIds.push(id);
+        deletedAssets.push({ id, title: asset.title });
         deletionTaskIds.push(taskId);
       }
 
@@ -189,14 +192,22 @@ export async function assetRoutes(app: FastifyInstance) {
         payloadHash,
         response,
       });
-      return response;
+      return { response, deletedAssets };
     });
 
     const enqueueResults = await Promise.allSettled(
-      result.deletionTaskIds.map((taskId, index) => enqueueAssetDeletionTask(taskId, result.acceptedIds[index])),
+      result.response.deletionTaskIds.map((taskId, index) => enqueueAssetDeletionTask(taskId, result.response.acceptedIds[index])),
     );
+    // The catalog must stop serving a video when its logical deletion commits,
+    // not after potentially slow S3 cleanup. Delivery is deliberately
+    // best-effort; TDED's full reconciliation remains the missed-event guard.
+    void Promise.allSettled(result.deletedAssets.map((asset) => dispatchWebhook(
+      WEBHOOK_EVENT.ASSET_DELETED,
+      { assetId: asset.id, title: asset.title },
+      orgId,
+    )));
     return {
-      result,
+      result: result.response,
       queuedForReconciliation: enqueueResults.some((entry) => entry.status === 'rejected'),
     };
   };

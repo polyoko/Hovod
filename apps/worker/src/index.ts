@@ -533,7 +533,6 @@ const assetDeletionWorker = new Worker(
         db.delete(analyticsAssetStats).where(eq(analyticsAssetStats.assetId, assetId)),
       ]);
       await db.delete(assets).where(and(eq(assets.id, assetId), eq(assets.status, ASSET_STATUS.DELETED)));
-      fireWebhook(WEBHOOK_EVENT.ASSET_DELETED, { assetId, title: asset.title }, asset.orgId).catch(() => {});
     } catch (error) {
       const message = sanitizeErrorMessage(error);
       const maximumAttempts = typeof job.opts.attempts === 'number' ? job.opts.attempts : 1;
