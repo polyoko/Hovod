@@ -47,6 +47,11 @@ const SUPPORTED_UPLOAD_CONTENT_TYPES = new Set([
   'video/ogg',
 ]);
 
+function needsRecovery(item: UploadItem) {
+  // Queue progress belongs to Videos; this page only resumes interrupted actions.
+  return Boolean(item.assetId) && item.status !== 'queued' && item.status !== 'ready';
+}
+
 function fileTitle(file: File) {
   return file.name.replace(/\.[^/.]+$/, '') || file.name;
 }
@@ -114,9 +119,9 @@ export function NewVideoPage() {
         const asset = await api<Asset>(`/v1/assets/${pointer.assetId}`);
         if (cancelled) return;
         const status = asset.status.toLowerCase();
-        if (status === 'queued') patchItem(pointer.localId, { status: 'queued', error: undefined, retryStage: undefined });
-        else if (status === 'processing') patchItem(pointer.localId, { status: 'processing', error: undefined, retryStage: undefined });
-        else if (status === 'ready') patchItem(pointer.localId, { status: 'ready', error: undefined, retryStage: undefined });
+        if (status === 'queued' || status === 'processing' || status === 'ready') {
+          replaceItems(itemsRef.current.filter((item) => item.localId !== pointer.localId));
+        }
         else if (status === 'uploaded') patchItem(pointer.localId, { status: 'error', error: t.videos.uploadRecovered, retryStage: 'processing' });
         else if (status === 'error' || status === 'failed') patchItem(pointer.localId, { status: 'error', error: asset.errorMessage || t.videoDetail.transcodingFailed, retryStage: 'processing' });
         else patchItem(pointer.localId, { status: 'error', error: t.videos.selectFileToResume, retryStage: 'upload' });
@@ -129,7 +134,7 @@ export function NewVideoPage() {
 
   useEffect(() => {
     if (!recoveryLoaded) return;
-    const pointers: RecoveryPointer[] = items.filter((item) => item.assetId && item.status !== 'ready').slice(-MAX_FILES_PER_BATCH).map((item) => ({
+    const pointers: RecoveryPointer[] = items.filter(needsRecovery).slice(-MAX_FILES_PER_BATCH).map((item) => ({
       localId: item.localId, assetId: item.assetId!, title: item.title, fileName: item.fileName, fileSize: item.fileSize,
     }));
     localStorage.setItem(RECOVERY_STORAGE_KEY, JSON.stringify(pointers));
