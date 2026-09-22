@@ -16,6 +16,7 @@ export const s3 = new S3Client({
 
 const UPLOAD_BATCH_SIZE = 10;
 const MAX_RETRIES = 3;
+const S3_UPLOAD_TIMEOUT_MS = 120_000;
 
 async function withRetry<T>(fn: () => Promise<T>, retries = MAX_RETRIES): Promise<T> {
   for (let attempt = 0; attempt <= retries; attempt++) {
@@ -67,7 +68,7 @@ export async function uploadDirectory(root: string, prefix: string): Promise<voi
             Key: key,
             Body: body,
             ACL: 'public-read',
-          }));
+          }), { abortSignal: AbortSignal.timeout(S3_UPLOAD_TIMEOUT_MS) });
         });
       })
     );
