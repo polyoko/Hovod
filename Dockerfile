@@ -38,6 +38,7 @@ RUN npm run -w @hovod/dashboard build
 FROM node:22-bookworm-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
+      curl \
       ffmpeg \
       redis-server \
       mariadb-server \
