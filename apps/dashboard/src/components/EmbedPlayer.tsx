@@ -14,6 +14,7 @@ export function EmbedPlayer() {
 
   const [manifestUrl, setManifestUrl] = useState('');
   const [thumbnailVttUrl, setThumbnailVttUrl] = useState('');
+  const [introDurationSec, setIntroDurationSec] = useState(0);
   const [posterUrl, setPosterUrl] = useState<string | undefined>(undefined);
   const [assetId, setAssetId] = useState('');
   const [error, setError] = useState('');
@@ -34,10 +35,11 @@ export function EmbedPlayer() {
 
   useEffect(() => {
     if (!safePlaybackId) return;
-    api<{ assetId: string; manifestUrl: string; thumbnailVttUrl: string; thumbnailUrl?: string | null; settings?: { primaryColor: string; theme: string; logoUrl: string | null } }>(`/v1/playback/${safePlaybackId}`)
+    api<{ assetId: string; manifestUrl: string; thumbnailVttUrl: string; thumbnailUrl?: string | null; introDurationSec?: number; settings?: { primaryColor: string; theme: string; logoUrl: string | null } }>(`/v1/playback/${safePlaybackId}`)
       .then((d) => {
         setManifestUrl(d.manifestUrl);
         setThumbnailVttUrl(d.thumbnailVttUrl);
+        setIntroDurationSec(d.introDurationSec ?? 0);
         if (d.thumbnailUrl) setPosterUrl(d.thumbnailUrl);
         setAssetId(d.assetId);
         if (d.settings) {
@@ -83,6 +85,7 @@ export function EmbedPlayer() {
           playbackId={playbackId}
           playerType="embed"
           track={!isPreview}
+          introDurationSec={introDurationSec}
         />
       </div>
     </div>

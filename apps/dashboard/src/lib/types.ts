@@ -116,6 +116,7 @@ export interface PlaybackData {
   title?: string;
   description?: string | null;
   durationSec?: number;
+  introDurationSec?: number;
   canEdit?: boolean;
   publicSettings?: AssetPublicSettings;
   settings?: PlaybackSettings | null;

@@ -67,6 +67,7 @@ export async function playbackRoutes(app: FastifyInstance) {
         title: asset.title,
         description: asset.description ?? null,
         durationSec: asset.durationSec,
+        introDurationSec: asset.introDurationMs / 1000,
         canEdit,
         publicSettings,
         settings: {

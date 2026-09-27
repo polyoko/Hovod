@@ -16,6 +16,8 @@ export async function generateThumbnails(
   srcWidth: number,
   srcHeight: number,
   durationSec: number,
+  /** Brand intro length; cues are shifted so they match HLS playback time. */
+  offsetSec = 0,
 ): Promise<void> {
   const thumbDir = path.join(outputDir, 'thumbnails');
   await mkdir(thumbDir, { recursive: true });
@@ -40,8 +42,8 @@ export async function generateThumbnails(
 
   let vtt = 'WEBVTT\n\n';
   for (let i = 0; i < totalThumbs; i++) {
-    const start = i * interval;
-    const end = Math.min((i + 1) * interval, durationSec);
+    const start = i * interval + offsetSec;
+    const end = Math.min((i + 1) * interval, durationSec) + offsetSec;
     const col = i % cols;
     const row = Math.floor(i / cols);
     const x = col * thumbWidth;

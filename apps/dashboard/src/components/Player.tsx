@@ -26,9 +26,11 @@ interface PlayerProps {
   externalVideoRef?: React.RefObject<HTMLVideoElement | null>;
   commentMarkers?: CommentMarker[];
   logoUrl?: string;
+  /** Brand intro at the start of the stream; playback starts after it and never seeks back into it. */
+  introDurationSec?: number;
 }
 
-export function Player({ url, thumbnailVttUrl, poster, accentColor, title, assetId, playbackId, playerType, track = true, subtitlesUrl, externalVideoRef, commentMarkers, logoUrl }: PlayerProps) {
+export function Player({ url, thumbnailVttUrl, poster, accentColor, title, assetId, playbackId, playerType, track = true, subtitlesUrl, externalVideoRef, commentMarkers, logoUrl, introDurationSec = 0 }: PlayerProps) {
   const { t } = useT();
   const accent = accentColor || '#6366f1';
   const containerRef = useRef<HTMLDivElement>(null);
@@ -78,11 +80,12 @@ export function Player({ url, thumbnailVttUrl, poster, accentColor, title, asset
 
     if (el.canPlayType('application/vnd.apple.mpegurl')) {
       el.src = url;
+      if (introDurationSec > 0) el.currentTime = introDurationSec;
       return;
     }
 
     if (Hls.isSupported()) {
-      const hls = new Hls();
+      const hls = new Hls({ startPosition: introDurationSec > 0 ? introDurationSec : -1 });
       hlsRef.current = hls;
       hls.loadSource(url);
       hls.attachMedia(el);
@@ -113,7 +116,7 @@ export function Player({ url, thumbnailVttUrl, poster, accentColor, title, asset
         hlsRef.current = null;
       };
     }
-  }, [url]);
+  }, [url, introDurationSec]);
 
   // Load thumbnails VTT
   useEffect(() => {
@@ -140,7 +143,13 @@ export function Player({ url, thumbnailVttUrl, poster, accentColor, title, asset
     const onPause = () => setPlaying(false);
     const onEnded = () => setEnded(true);
     // Clear the end state when the user scrubs back into the video
-    const onSeeking = () => { if (el.currentTime < el.duration - 0.2) setEnded(false); };
+    const onSeeking = () => {
+      // Chapters, transcript and replay may target 0; the intro is never shown.
+      if (el.currentTime < introDurationSec - 0.05) el.currentTime = introDurationSec;
+      if (el.currentTime < el.duration - 0.2) setEnded(false);
+    };
+    // Safari native HLS ignores a currentTime set before metadata loads.
+    const onLoadedMetadata = () => { if (el.currentTime < introDurationSec) el.currentTime = introDurationSec; };
     const onVolumeChange = () => setMuted(el.muted);
 
     el.addEventListener('timeupdate', onTimeUpdate);
@@ -149,6 +158,7 @@ export function Player({ url, thumbnailVttUrl, poster, accentColor, title, asset
     el.addEventListener('pause', onPause);
     el.addEventListener('ended', onEnded);
     el.addEventListener('seeking', onSeeking);
+    el.addEventListener('loadedmetadata', onLoadedMetadata);
     el.addEventListener('volumechange', onVolumeChange);
 
     return () => {
@@ -158,9 +168,10 @@ export function Player({ url, thumbnailVttUrl, poster, accentColor, title, asset
       el.removeEventListener('pause', onPause);
       el.removeEventListener('ended', onEnded);
       el.removeEventListener('seeking', onSeeking);
+      el.removeEventListener('loadedmetadata', onLoadedMetadata);
       el.removeEventListener('volumechange', onVolumeChange);
     };
-  }, []);
+  }, [introDurationSec]);
 
   // Auto-hide controls
   const resetHideTimer = useCallback(() => {
@@ -305,7 +316,7 @@ export function Player({ url, thumbnailVttUrl, poster, accentColor, title, asset
   const replay = () => {
     const el = videoRef.current;
     if (!el) return;
-    el.currentTime = 0;
+    el.currentTime = introDurationSec;
     setEnded(false);
     void el.play();
   };
@@ -313,7 +324,7 @@ export function Player({ url, thumbnailVttUrl, poster, accentColor, title, asset
   const seek = (fraction: number) => {
     const el = videoRef.current;
     if (!el || !duration) return;
-    el.currentTime = Math.max(0, Math.min(duration, fraction * duration));
+    el.currentTime = Math.max(introDurationSec, Math.min(duration, fraction * duration));
   };
 
   const switchQuality = (level: number) => {

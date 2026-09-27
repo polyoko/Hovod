@@ -301,6 +301,7 @@ export function WatchPage() {
                 externalVideoRef={videoRef}
                 commentMarkers={commentMarkers}
                 logoUrl={data.settings?.logoUrl ?? undefined}
+                introDurationSec={data.introDurationSec ?? 0}
               />
             </div>
 

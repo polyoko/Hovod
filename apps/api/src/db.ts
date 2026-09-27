@@ -57,6 +57,10 @@ export async function runMigrations() {
   await pool.query(`
     ALTER TABLE assets ADD COLUMN custom_thumbnail_key VARCHAR(512) NULL AFTER public_settings
   `).catch(() => { /* column already exists */ });
+  // Brand intro length; players skip it (docs/features/brand-intro-and-watermark.md)
+  await pool.query(`
+    ALTER TABLE assets ADD COLUMN intro_duration_ms INT NOT NULL DEFAULT 0 AFTER duration_sec
+  `).catch(() => { /* column already exists */ });
 
   // Add org_id column if upgrading from a previous version
   await pool.query(`

@@ -40,6 +40,7 @@ FROM node:22-bookworm-slim
 RUN apt-get update && apt-get install -y --no-install-recommends \
       curl \
       ffmpeg \
+      fonts-dejavu-core \
       redis-server \
       mariadb-server \
     && rm -rf /var/lib/apt/lists/*
@@ -64,6 +65,7 @@ COPY --from=build /app/apps/api/package.json apps/api/package.json
 # Copy Worker
 COPY --from=build /app/apps/worker/dist apps/worker/dist
 COPY --from=build /app/apps/worker/package.json apps/worker/package.json
+COPY --from=build /app/apps/worker/assets apps/worker/assets
 
 # Copy Dashboard (served by API via @fastify/static)
 COPY --from=build /app/apps/dashboard/dist apps/dashboard/dist

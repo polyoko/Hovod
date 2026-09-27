@@ -22,6 +22,8 @@ import {
   TRANSCODING_LADDER,
   filterLadder,
   transcodeRendition,
+  resolveIntro,
+  type Branding,
   createDownloadableMp4,
   extractPosterThumbnail,
   createMasterPlaylist,
@@ -280,11 +282,19 @@ const worker = new Worker(
       const ladder = filterLadder(probe.width, probe.height, selectedProfiles);
       console.log(`[worker] Ladder: ${ladder.map(p => p.quality).join(', ')}`);
 
+      /* Branding is burned into every rendition so downloaded copies keep it.
+       * A missing intro fails the job rather than publishing without it. */
+      const branding: Branding = {
+        intro: env.INTRO_DIR ? await resolveIntro(env.INTRO_DIR, probe.width, probe.height) : null,
+        watermarkText: env.WATERMARK_TEXT ?? null,
+        fontFile: env.WATERMARK_FONT_FILE,
+      };
+
       const encoded: EncodedRendition[] = [];
       for (const profile of ladder) {
         console.log(`[worker] Transcoding ${profile.quality}...`);
         await setStep(`transcoding_${profile.quality}`);
-        await transcodeRendition(sourcePath, outputDir, profile, probe.duration, workerConfig.ffmpegThreads);
+        await transcodeRendition(sourcePath, probe, outputDir, profile, branding, workerConfig.ffmpegThreads);
 
         // Create a downloadable MP4 from HLS segments (fast remux, no re-encoding)
         await createDownloadableMp4(outputDir, profile);
@@ -316,7 +326,7 @@ const worker = new Worker(
       /* Generate thumbnails */
       await setStep(PROCESSING_STEP.THUMBNAILS);
       console.log('[worker] Generating thumbnails...');
-      await generateThumbnails(sourcePath, outputDir, probe.width, probe.height, probe.duration);
+      await generateThumbnails(sourcePath, outputDir, probe.width, probe.height, probe.duration, branding.intro?.durationSec ?? 0);
       await extractPosterThumbnail(sourcePath, outputDir, probe.duration);
 
       /* Create master playlist and upload */
@@ -341,7 +351,7 @@ const worker = new Worker(
         ? nanoid(ID_LENGTH.SOURCE_CLEANUP_TASK)
         : null;
       await db.transaction(async (tx) => {
-        await tx.update(assets).set({ status: ASSET_STATUS.READY, durationSec: Math.round(probe.duration), errorMessage: null }).where(eq(assets.id, assetId));
+        await tx.update(assets).set({ status: ASSET_STATUS.READY, durationSec: Math.round(probe.duration), introDurationMs: Math.round((branding.intro?.durationSec ?? 0) * 1000), errorMessage: null }).where(eq(assets.id, assetId));
         if (sourceCleanupTaskId) {
           await tx.insert(assetSourceCleanupTasks).values({
             id: sourceCleanupTaskId,
@@ -383,7 +393,7 @@ const worker = new Worker(
         const aiJobId = nanoid(ID_LENGTH.AI_JOB);
         await db.insert(aiJobs).values({ id: aiJobId, assetId, status: AI_JOB_STATUS.QUEUED });
         try {
-          await processAi({ assetId, aiJobId, sourcePath, outputDir: tmpDir, durationSec: probe.duration, db, aiOptions });
+          await processAi({ assetId, aiJobId, sourcePath, outputDir: tmpDir, durationSec: probe.duration, offsetSec: branding.intro?.durationSec ?? 0, db, aiOptions });
           const aiDir = path.join(tmpDir, 'ai');
           await uploadDirectory(aiDir, `${S3_PATHS.PLAYBACK_PREFIX}/${assetId}/ai`);
           console.log(`[worker] AI outputs uploaded for asset ${assetId}`);

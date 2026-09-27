@@ -13,6 +13,11 @@ const envSchema = z.object({
   UPLOAD_DIR: z.string().default('/data/uploads'),
   WEBHOOK_URL: z.string().url().optional(),
 
+  /* ─── Branding (optional — unset keeps the plain output) ── */
+  INTRO_DIR: z.string().min(1).optional(),
+  WATERMARK_TEXT: z.string().min(1).optional(),
+  WATERMARK_FONT_FILE: z.string().default('/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf'),
+
   /* ─── Scaling (optional — auto-detected from hardware) ── */
   WORKER_CONCURRENCY: z.coerce.number().int().min(1).optional(),
   FFMPEG_THREADS: z.coerce.number().int().min(0).optional(),

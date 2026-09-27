@@ -6,6 +6,20 @@ import { isAiConfigured, isChapteringConfigured, createWhisper, createLlm } from
 import { extractAudio } from './audio-extract.js';
 import { generateVtt } from './subtitles.js';
 import type { DrizzleInstance } from '../types.js';
+import type { WhisperResult } from './providers/whisper.js';
+
+function shiftTranscript(result: WhisperResult, offsetSec: number): WhisperResult {
+  if (offsetSec === 0) return result;
+  return {
+    ...result,
+    segments: result.segments.map((seg) => ({
+      ...seg,
+      start: seg.start + offsetSec,
+      end: seg.end + offsetSec,
+      words: seg.words?.map((w) => ({ ...w, start: w.start + offsetSec, end: w.end + offsetSec })),
+    })),
+  };
+}
 
 export interface AiProcessOptions {
   assetId: string;
@@ -13,6 +27,8 @@ export interface AiProcessOptions {
   sourcePath: string;
   outputDir: string;
   durationSec: number;
+  /** Brand intro length; every timestamp is shifted so it matches HLS playback time. */
+  offsetSec?: number;
   db: DrizzleInstance;
   aiOptions?: { transcription?: boolean; subtitles?: boolean; chapters?: boolean };
 }
@@ -28,7 +44,7 @@ export interface AiProcessOptions {
  * the asset remains READY regardless of AI outcome.
  */
 export async function processAi(opts: AiProcessOptions): Promise<void> {
-  const { assetId, aiJobId, sourcePath, outputDir, durationSec, db, aiOptions } = opts;
+  const { assetId, aiJobId, sourcePath, outputDir, durationSec, offsetSec = 0, db, aiOptions } = opts;
 
   if (!isAiConfigured() || aiOptions?.transcription === false) {
     await db.update(aiJobs).set({ status: AI_JOB_STATUS.SKIPPED }).where(eq(aiJobs.id, aiJobId));
@@ -52,7 +68,7 @@ export async function processAi(opts: AiProcessOptions): Promise<void> {
     await db.update(aiJobs).set({ transcriptionStatus: AI_STEP_STATUS.PROCESSING }).where(eq(aiJobs.id, aiJobId));
 
     const whisper = createWhisper();
-    const transcript = await whisper.transcribe(audioPath);
+    const transcript = shiftTranscript(await whisper.transcribe(audioPath), offsetSec);
 
     const transcriptJson = JSON.stringify(transcript, null, 2);
     await writeFile(path.join(aiDir, 'transcript.json'), transcriptJson, 'utf-8');
@@ -88,7 +104,8 @@ export async function processAi(opts: AiProcessOptions): Promise<void> {
       await db.update(aiJobs).set({ chaptersStatus: AI_STEP_STATUS.PROCESSING }).where(eq(aiJobs.id, aiJobId));
 
       const llm = createLlm();
-      const chapters = await llm.generateChapters(transcript.text, durationSec);
+      const chapters = (await llm.generateChapters(transcript.text, durationSec))
+        .map((c) => ({ ...c, startTime: c.startTime + offsetSec, endTime: c.endTime + offsetSec }));
       const chaptersJson = JSON.stringify({ chapters }, null, 2);
       await writeFile(path.join(aiDir, 'chapters.json'), chaptersJson, 'utf-8');
 

@@ -27,6 +27,8 @@ export const assets = mysqlTable('assets', {
   publicSettings: json('public_settings'),
   customThumbnailKey: varchar('custom_thumbnail_key', { length: 512 }),
   durationSec: int('duration_sec'),
+  /** Length of the brand intro prepended to the HLS output; players start here. */
+  introDurationMs: int('intro_duration_ms').notNull().default(0),
   errorMessage: varchar('error_message', { length: 1024 }),
   createdAt: timestamp('created_at').notNull().defaultNow(),
   updatedAt: timestamp('updated_at').notNull().defaultNow().onUpdateNow(),
