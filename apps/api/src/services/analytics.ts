@@ -93,6 +93,26 @@ export async function insertAnalyticsEvents(
 const REAL_PLAYER = "COALESCE(player_type, '') <> 'server'";
 const REAL_PLAYER_E = "COALESCE(e.player_type, '') <> 'server'";
 
+/**
+ * JSON columns can arrive as raw strings (see routes/assets.ts metadata), and a
+ * string retention curve crashed the dashboard chart. Parse and shape-check.
+ */
+function readJsonColumn<T>(value: unknown, isShape: (v: unknown) => boolean, fallback: T): T {
+  let parsed = value;
+  if (typeof value === 'string') {
+    try {
+      parsed = JSON.parse(value);
+    } catch {
+      return fallback;
+    }
+  }
+  return isShape(parsed) ? parsed as T : fallback;
+}
+
+function isRecord(value: unknown): boolean {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
 /* ─── Per-Asset Analytics (real-time from raw events) ──────── */
 
 export async function getAssetAnalytics(assetId: string, period: string) {
@@ -152,8 +172,8 @@ export async function getAssetAnalytics(assetId: string, period: string) {
       avgWatchPercent: precomputed?.avgWatchPercent ?? 0,
       engagementScore: precomputed?.engagementScore ?? 0,
       peakHour: precomputed?.peakHour ?? null,
-      qualityDistribution: precomputed?.qualityDistribution ?? {},
-      retentionCurve: precomputed?.retentionCurve ?? [],
+      qualityDistribution: readJsonColumn(precomputed?.qualityDistribution, isRecord, {}),
+      retentionCurve: readJsonColumn(precomputed?.retentionCurve, Array.isArray, []),
     },
     timeSeries: tsRows.map((r: any) => ({
       date: String(r.date),
