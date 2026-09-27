@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { api } from '../lib/api.js';
 import type { PlaybackData, Transcript, Chapter, Comment } from '../lib/types.js';
+import { IntroOffset } from '../lib/intro-offset.js';
 import { Player } from './Player.js';
 import type { CommentMarker } from './Player.js';
 import { ChapterList } from './ChapterList.js';
@@ -247,6 +248,7 @@ export function WatchPage() {
   const showComments = data.publicSettings?.showComments !== false;
 
   return (
+    <IntroOffset.Provider value={data.introDurationSec ?? 0}>
     <div className={`min-h-screen flex flex-col ${isDark ? 'bg-zinc-950 text-zinc-50' : 'bg-white text-zinc-900'}`}>
       <main className="flex-1 max-w-7xl w-full mx-auto px-6 py-8">
         {/* Logo + Title + Description */}
@@ -532,5 +534,6 @@ export function WatchPage() {
         />
       )}
     </div>
+    </IntroOffset.Provider>
   );
 }

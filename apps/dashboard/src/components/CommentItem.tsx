@@ -1,5 +1,6 @@
-import { useState } from 'react';
+import { useState, useContext } from 'react';
 import type { Comment } from '../lib/types.js';
+import { IntroOffset } from '../lib/intro-offset.js';
 import { timeAgo, formatTime } from '../lib/helpers.js';
 
 interface CommentItemProps {
@@ -11,6 +12,7 @@ interface CommentItemProps {
 }
 
 export function CommentItem({ comment, onSeek, dark, accentColor, isNew }: CommentItemProps) {
+  const intro = useContext(IntroOffset);
   const [imgError, setImgError] = useState(false);
   const gravatarUrl = `https://www.gravatar.com/avatar/${comment.emailHash}?d=mp&s=80`;
 
@@ -63,7 +65,7 @@ export function CommentItem({ comment, onSeek, dark, accentColor, isNew }: Comme
               <svg width="9" height="9" viewBox="0 0 24 24" fill="currentColor">
                 <path d="M8 5v14l11-7z" />
               </svg>
-              {formatTime(comment.timestampSec)}
+              {formatTime(comment.timestampSec - intro)}
             </button>
           )}
           <span className={`text-[11px] ${dark ? 'text-zinc-600' : 'text-zinc-400'}`}>

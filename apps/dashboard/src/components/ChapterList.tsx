@@ -1,5 +1,6 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useContext } from 'react';
 import type { Chapter } from '../lib/types.js';
+import { IntroOffset } from '../lib/intro-offset.js';
 import { formatTime } from '../lib/helpers.js';
 import { InlineEdit } from './InlineEdit.js';
 
@@ -14,6 +15,7 @@ interface ChapterListProps {
 }
 
 export function ChapterList({ chapters, onSeek, videoRef, dark = false, label = 'Chapters', canEdit = false, onChapterTitleChange }: ChapterListProps) {
+  const intro = useContext(IntroOffset);
   const [activeIndex, setActiveIndex] = useState(0);
 
   useEffect(() => {
@@ -65,7 +67,7 @@ export function ChapterList({ chapters, onSeek, videoRef, dark = false, label = 
                     ? dark ? 'text-accent-400' : 'text-accent-500'
                     : dark ? 'text-zinc-600 group-hover:text-zinc-500' : 'text-zinc-400 group-hover:text-zinc-500'
                 }`}>
-                  {formatTime(ch.startTime)}
+                  {formatTime(ch.startTime - intro)}
                 </span>
                 {canEdit && onChapterTitleChange ? (
                   <span onClick={(e) => e.stopPropagation()}>

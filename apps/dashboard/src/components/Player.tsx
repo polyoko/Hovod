@@ -324,7 +324,7 @@ export function Player({ url, thumbnailVttUrl, poster, accentColor, title, asset
   const seek = (fraction: number) => {
     const el = videoRef.current;
     if (!el || !duration) return;
-    el.currentTime = Math.max(introDurationSec, Math.min(duration, fraction * duration));
+    el.currentTime = introDurationSec + Math.max(0, Math.min(1, fraction)) * Math.max(0, duration - introDurationSec);
   };
 
   const switchQuality = (level: number) => {
@@ -358,8 +358,11 @@ export function Player({ url, thumbnailVttUrl, poster, accentColor, title, asset
     }
   };
 
-  const progressPercent = duration > 0 ? (currentTime / duration) * 100 : 0;
-  const bufferedPercent = duration > 0 ? (buffered / duration) * 100 : 0;
+  // Controls show content time: the intro is skipped, so 0:00 is where it ends.
+  const contentDuration = Math.max(0, duration - introDurationSec);
+  const contentTime = Math.max(0, currentTime - introDurationSec);
+  const progressPercent = contentDuration > 0 ? (contentTime / contentDuration) * 100 : 0;
+  const bufferedPercent = contentDuration > 0 ? (Math.max(0, buffered - introDurationSec) / contentDuration) * 100 : 0;
 
   const hoverThumbnail = hoverProgress !== null
     ? thumbnails.find(t => hoverTime >= t.start && hoverTime < t.end)
@@ -471,11 +474,11 @@ export function Player({ url, thumbnailVttUrl, poster, accentColor, title, asset
       )}
 
       {/* Comment markers — always visible at bottom of player, like YouTube chapter markers */}
-      {commentMarkers && duration > 0 && (
+      {commentMarkers && contentDuration > 0 && (
         <div className="absolute bottom-0 left-0 right-0 h-[3px] pointer-events-none z-[2]">
           <div className="relative w-full h-full">
             {commentMarkers.map((marker, i) => {
-              const position = (marker.timestampSec / duration) * 100;
+              const position = ((marker.timestampSec - introDurationSec) / contentDuration) * 100;
               return (
                 <div
                   key={i}
@@ -505,7 +508,7 @@ export function Player({ url, thumbnailVttUrl, poster, accentColor, title, asset
             const rect = e.currentTarget.getBoundingClientRect();
             const fraction = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
             setHoverProgress(fraction * 100);
-            setHoverTime(fraction * duration);
+            setHoverTime(introDurationSec + fraction * Math.max(0, duration - introDurationSec));
           }}
           onMouseLeave={() => setHoverProgress(null)}
           onClick={(e) => {
@@ -530,7 +533,7 @@ export function Player({ url, thumbnailVttUrl, poster, accentColor, title, asset
                 }}
               />
               <div className="text-[10px] text-center text-white bg-black/80 py-0.5 rounded-b">
-                {formatTime(hoverTime)}
+                {formatTime(hoverTime - introDurationSec)}
               </div>
             </div>
           )}
@@ -541,7 +544,7 @@ export function Player({ url, thumbnailVttUrl, poster, accentColor, title, asset
               className="absolute bottom-7 -translate-x-1/2 pointer-events-none z-10 text-[10px] text-white bg-black/80 px-2 py-1 rounded"
               style={{ left: `${hoverProgress}%` }}
             >
-              {formatTime(hoverTime)}
+              {formatTime(hoverTime - introDurationSec)}
             </div>
           )}
 
@@ -557,8 +560,8 @@ export function Player({ url, thumbnailVttUrl, poster, accentColor, title, asset
           )}
 
           {/* Comment marker dots with hover tooltips */}
-          {commentMarkers && duration > 0 && commentMarkers.map((marker, i) => {
-            const position = (marker.timestampSec / duration) * 100;
+          {commentMarkers && contentDuration > 0 && commentMarkers.map((marker, i) => {
+            const position = ((marker.timestampSec - introDurationSec) / contentDuration) * 100;
             return (
               <div
                 key={i}
@@ -599,7 +602,7 @@ export function Player({ url, thumbnailVttUrl, poster, accentColor, title, asset
           </button>
 
           <span className="text-xs text-zinc-300 tabular-nums">
-            {formatTime(currentTime)} / {formatTime(duration)}
+            {formatTime(contentTime)} / {formatTime(contentDuration)}
           </span>
 
           <div className="flex-1" />

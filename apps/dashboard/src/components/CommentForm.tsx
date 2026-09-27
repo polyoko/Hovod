@@ -1,4 +1,5 @@
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useRef, useState, useContext } from 'react';
+import { IntroOffset } from '../lib/intro-offset.js';
 import { formatTime } from '../lib/helpers.js';
 import type { UserIdentity } from './IdentityModal.js';
 
@@ -19,6 +20,7 @@ interface CommentFormProps {
 }
 
 export function CommentForm({ onSubmit, videoRef, dark, accentColor, isSubmitting, identity, onRequestIdentity, onClearIdentity, labels }: CommentFormProps) {
+  const intro = useContext(IntroOffset);
   const [body, setBody] = useState('');
   const [timestampMode, setTimestampMode] = useState(false);
   const [capturedTime, setCapturedTime] = useState(0);
@@ -120,7 +122,7 @@ export function CommentForm({ onSubmit, videoRef, dark, accentColor, isSubmittin
               <circle cx="12" cy="12" r="10" />
               <polyline points="12 6 12 12 16 14" />
             </svg>
-            {timestampMode ? `${labels.commentingAt} ${formatTime(capturedTime)}` : formatTime(videoRef.current?.currentTime ?? 0)}
+            {timestampMode ? `${labels.commentingAt} ${formatTime(capturedTime - intro)}` : formatTime((videoRef.current?.currentTime ?? 0) - intro)}
           </button>
 
           {/* Identity badge */}

@@ -1,5 +1,6 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, useContext } from 'react';
 import type { Transcript } from '../lib/types.js';
+import { IntroOffset } from '../lib/intro-offset.js';
 import { formatTime } from '../lib/helpers.js';
 import { InlineEdit } from './InlineEdit.js';
 
@@ -17,6 +18,7 @@ interface TranscriptPanelProps {
 }
 
 export function TranscriptPanel({ transcript, onSeek, videoRef, dark = false, label = 'Transcript', searchPlaceholder = 'Search...', noResultsLabel = 'No matches found', canEdit = false, onSegmentTextChange, hideHeader = false }: TranscriptPanelProps) {
+  const intro = useContext(IntroOffset);
   const [search, setSearch] = useState('');
   const [activeSegmentId, setActiveSegmentId] = useState(-1);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -140,7 +142,7 @@ export function TranscriptPanel({ transcript, onSeek, videoRef, dark = false, la
                   ? dark ? 'text-accent-400' : 'text-accent-600'
                   : dark ? 'text-zinc-600' : 'text-zinc-400'
               }`}>
-                {formatTime(seg.start)}
+                {formatTime(seg.start - intro)}
               </span>
               {canEdit && !query && onSegmentTextChange ? (
                 <span className="text-[13px] leading-relaxed flex-1 min-w-0" onClick={(e) => e.stopPropagation()}>

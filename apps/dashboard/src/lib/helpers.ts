@@ -17,7 +17,7 @@ export function formatDuration(sec: number | null): string {
 }
 
 export function formatTime(s: number): string {
-  if (!isFinite(s)) return '0:00';
+  if (!isFinite(s) || s < 0) return '0:00';
   const m = Math.floor(s / 60);
   const sec = Math.floor(s % 60);
   return `${m}:${sec.toString().padStart(2, '0')}`;
