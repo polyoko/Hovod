@@ -20,13 +20,15 @@ interface PlayerProps {
   assetId?: string;
   playbackId?: string;
   playerType?: 'embed' | 'dashboard';
+  /** False for owner previews, which must not count as views. */
+  track?: boolean;
   subtitlesUrl?: string;
   externalVideoRef?: React.RefObject<HTMLVideoElement | null>;
   commentMarkers?: CommentMarker[];
   logoUrl?: string;
 }
 
-export function Player({ url, thumbnailVttUrl, poster, accentColor, title, assetId, playbackId, playerType, subtitlesUrl, externalVideoRef, commentMarkers, logoUrl }: PlayerProps) {
+export function Player({ url, thumbnailVttUrl, poster, accentColor, title, assetId, playbackId, playerType, track = true, subtitlesUrl, externalVideoRef, commentMarkers, logoUrl }: PlayerProps) {
   const { t } = useT();
   const accent = accentColor || '#6366f1';
   const containerRef = useRef<HTMLDivElement>(null);
@@ -234,7 +236,7 @@ export function Player({ url, thumbnailVttUrl, poster, accentColor, title, asset
   // Analytics tracking
   useEffect(() => {
     const el = videoRef.current;
-    if (!el || !assetId || !playbackId) return;
+    if (!el || !assetId || !playbackId || !track) return;
 
     const analytics = new PlayerAnalytics({
       assetId,
@@ -292,7 +294,7 @@ export function Player({ url, thumbnailVttUrl, poster, accentColor, title, asset
     }
 
     return cleanup;
-  }, [assetId, playbackId, playerType]);
+  }, [assetId, playbackId, playerType, track]);
 
   const togglePlay = () => {
     const el = videoRef.current;

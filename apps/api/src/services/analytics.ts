@@ -1,11 +1,9 @@
 import { eq, sql, desc } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
-import type { FastifyRequest } from 'fastify';
 import {
   analyticsEvents,
   analyticsAssetStats,
   assets,
-  ANALYTICS_EVENT,
   ID_LENGTH,
 } from '@hovod/db';
 import { db, pool } from '../db.js';
@@ -88,26 +86,12 @@ export async function insertAnalyticsEvents(
   return rows.length;
 }
 
-/** Fire-and-forget server-side manifest view tracking */
-export function insertManifestView(
-  assetId: string,
-  playbackId: string,
-  request: FastifyRequest,
-) {
-  const ua = (request.headers['user-agent'] as string) || '';
-  const lang = (request.headers['accept-language'] as string) || '';
-  return db.insert(analyticsEvents).values({
-    id: nanoid(ID_LENGTH.ANALYTICS_EVENT),
-    sessionId: `srv-${nanoid(12)}`,
-    assetId,
-    playbackId,
-    eventType: ANALYTICS_EVENT.VIEW_START,
-    userAgent: ua.slice(0, 512),
-    country: parseCountryHint(lang),
-    deviceType: parseDeviceType(ua),
-    playerType: 'server',
-  });
-}
+/**
+ * Legacy rows from server-side manifest tracking (player_type = 'server') were
+ * counted on every playback API call, not on real playback. Exclude them.
+ */
+const REAL_PLAYER = "COALESCE(player_type, '') <> 'server'";
+const REAL_PLAYER_E = "COALESCE(e.player_type, '') <> 'server'";
 
 /* ─── Per-Asset Analytics (real-time from raw events) ──────── */
 
@@ -118,11 +102,11 @@ export async function getAssetAnalytics(assetId: string, period: string) {
   // Real-time stats from raw events
   const statsRows = await rawQuery(
     `SELECT
-      COALESCE(SUM(CASE WHEN event_type = 'view_start' THEN 1 ELSE 0 END), 0) as total_views,
+      COUNT(DISTINCT CASE WHEN event_type = 'view_start' THEN session_id END) as total_views,
       COUNT(DISTINCT session_id) as total_unique_sessions,
       COALESCE(SUM(CASE WHEN event_type = 'heartbeat' THEN 10 ELSE 0 END), 0) as total_watch_time_sec
     FROM analytics_events
-    WHERE asset_id = ? AND created_at >= ?`,
+    WHERE asset_id = ? AND created_at >= ? AND ${REAL_PLAYER}`,
     [assetId, dateCutoff],
   );
   const stats = statsRows[0];
@@ -131,11 +115,11 @@ export async function getAssetAnalytics(assetId: string, period: string) {
   const tsRows = await rawQuery(
     `SELECT
       DATE_FORMAT(created_at, '%Y-%m-%d') as date,
-      SUM(CASE WHEN event_type = 'view_start' THEN 1 ELSE 0 END) as views,
+      COUNT(DISTINCT CASE WHEN event_type = 'view_start' THEN session_id END) as views,
       SUM(CASE WHEN event_type = 'heartbeat' THEN 10 ELSE 0 END) as watch_time_sec,
       COUNT(DISTINCT session_id) as unique_sessions
     FROM analytics_events
-    WHERE asset_id = ? AND created_at >= ?
+    WHERE asset_id = ? AND created_at >= ? AND ${REAL_PLAYER}
     GROUP BY DATE_FORMAT(created_at, '%Y-%m-%d')
     ORDER BY date`,
     [assetId, dateCutoff],
@@ -145,9 +129,9 @@ export async function getAssetAnalytics(assetId: string, period: string) {
   const hourlyRows = await rawQuery(
     `SELECT
       HOUR(created_at) as hour,
-      SUM(CASE WHEN event_type = 'view_start' THEN 1 ELSE 0 END) as views
+      COUNT(DISTINCT CASE WHEN event_type = 'view_start' THEN session_id END) as views
     FROM analytics_events
-    WHERE asset_id = ? AND created_at >= ?
+    WHERE asset_id = ? AND created_at >= ? AND ${REAL_PLAYER}
     GROUP BY HOUR(created_at)
     ORDER BY HOUR(created_at)`,
     [assetId, dateCutoff],
@@ -193,11 +177,11 @@ export async function getOverviewAnalytics(period: string, orgId: string) {
   // Summary from raw events (scoped to org)
   const summaryRows = await rawQuery(
     `SELECT
-      COALESCE(SUM(CASE WHEN e.event_type = 'view_start' THEN 1 ELSE 0 END), 0) as total_views,
+      COUNT(DISTINCT CASE WHEN e.event_type = 'view_start' THEN e.session_id END) as total_views,
       COALESCE(SUM(CASE WHEN e.event_type = 'heartbeat' THEN 10 ELSE 0 END), 0) as total_watch_time_sec
     FROM analytics_events e
     INNER JOIN assets a ON a.id = e.asset_id
-    WHERE a.org_id = ? AND e.created_at >= ?`,
+    WHERE a.org_id = ? AND e.created_at >= ? AND ${REAL_PLAYER_E}`,
     [orgId, dateCutoff],
   );
   const summary = summaryRows[0];
@@ -223,12 +207,12 @@ export async function getOverviewAnalytics(period: string, orgId: string) {
   const tsRows = await rawQuery(
     `SELECT
       DATE_FORMAT(e.created_at, '%Y-%m-%d') as date,
-      SUM(CASE WHEN e.event_type = 'view_start' THEN 1 ELSE 0 END) as views,
+      COUNT(DISTINCT CASE WHEN e.event_type = 'view_start' THEN e.session_id END) as views,
       SUM(CASE WHEN e.event_type = 'heartbeat' THEN 10 ELSE 0 END) as watch_time_sec,
       COUNT(DISTINCT e.session_id) as unique_sessions
     FROM analytics_events e
     INNER JOIN assets a ON a.id = e.asset_id
-    WHERE a.org_id = ? AND e.created_at >= ?
+    WHERE a.org_id = ? AND e.created_at >= ? AND ${REAL_PLAYER_E}
     GROUP BY DATE_FORMAT(e.created_at, '%Y-%m-%d')
     ORDER BY date`,
     [orgId, dateCutoff],
@@ -238,10 +222,10 @@ export async function getOverviewAnalytics(period: string, orgId: string) {
   const topRows = await rawQuery(
     `SELECT
       e.asset_id,
-      SUM(CASE WHEN e.event_type = 'view_start' THEN 1 ELSE 0 END) as views
+      COUNT(DISTINCT CASE WHEN e.event_type = 'view_start' THEN e.session_id END) as views
     FROM analytics_events e
     INNER JOIN assets a ON a.id = e.asset_id
-    WHERE a.org_id = ? AND e.created_at >= ?
+    WHERE a.org_id = ? AND e.created_at >= ? AND ${REAL_PLAYER_E}
     GROUP BY e.asset_id
     HAVING views > 0
     ORDER BY views DESC
@@ -275,10 +259,10 @@ export async function getOverviewAnalytics(period: string, orgId: string) {
   const peakRows = await rawQuery(
     `SELECT
       HOUR(e.created_at) as hour,
-      SUM(CASE WHEN e.event_type = 'view_start' THEN 1 ELSE 0 END) as views
+      COUNT(DISTINCT CASE WHEN e.event_type = 'view_start' THEN e.session_id END) as views
     FROM analytics_events e
     INNER JOIN assets a ON a.id = e.asset_id
-    WHERE a.org_id = ? AND e.created_at >= ?
+    WHERE a.org_id = ? AND e.created_at >= ? AND ${REAL_PLAYER_E}
     GROUP BY HOUR(e.created_at)
     ORDER BY HOUR(e.created_at)`,
     [orgId, dateCutoff],

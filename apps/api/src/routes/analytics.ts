@@ -28,7 +28,7 @@ const eventSchema = z.object({
   qualityHeight: z.number().int().positive().optional(),
   bufferDurationMs: z.number().int().nonnegative().optional(),
   errorMessage: z.string().max(512).optional(),
-  playerType: z.enum(['embed', 'dashboard', 'server']).optional(),
+  playerType: z.enum(['embed', 'dashboard', 'web']).optional(),
   referrer: z.string().max(2048).optional(),
   timestamp: z.number().optional(),
 });
@@ -37,11 +37,21 @@ const batchSchema = z.object({
   events: z.array(eventSchema).min(1).max(50),
 });
 
+/**
+ * Ingest is unauthenticated, so the global limit keys it by IP. A proxying
+ * site (TDED Web) sends every viewer's heartbeats from one IP, ~6/min each.
+ * ponytail: flat per-IP ceiling (~500 concurrent proxied viewers); key by
+ * forwarded viewer or batch heartbeats if a proxy outgrows it.
+ */
+const INGEST_RATE_LIMIT_PER_MIN = 3_000;
+
 const periodSchema = z.enum(['7d', '30d', '90d', 'all']).default('30d');
 
 export async function analyticsRoutes(app: FastifyInstance) {
   /* Ingest player events (batch) */
-  app.post('/v1/analytics/events', async (request, reply) => {
+  app.post('/v1/analytics/events', {
+    config: { rateLimit: { max: INGEST_RATE_LIMIT_PER_MIN, timeWindow: '1 minute' } },
+  }, async (request, reply) => {
     const { events } = batchSchema.parse(request.body);
     const ua = (request.headers['user-agent'] as string) || '';
     const lang = (request.headers['accept-language'] as string) || '';

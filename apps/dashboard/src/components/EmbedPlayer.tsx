@@ -26,6 +26,8 @@ export function EmbedPlayer() {
   const queryAccentColor = rawColor && HEX_COLOR_RE.test(rawColor) ? rawColor : undefined;
   const rawTitle = searchParams.get('title') || undefined;
   const title = rawTitle ? rawTitle.slice(0, 200) : undefined;
+  // Dashboard previews pass ?preview=1 so the owner's own viewing isn't counted
+  const isPreview = searchParams.get('preview') === '1';
 
   // Query param color takes priority over org settings color
   const accentColor = queryAccentColor || settingsColor;
@@ -80,6 +82,7 @@ export function EmbedPlayer() {
           assetId={assetId}
           playbackId={playbackId}
           playerType="embed"
+          track={!isPreview}
         />
       </div>
     </div>

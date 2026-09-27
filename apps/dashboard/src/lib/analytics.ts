@@ -2,6 +2,8 @@ const API = (import.meta.env.VITE_API_BASE_URL as string) || '';
 const HEARTBEAT_INTERVAL = 10_000;
 const BATCH_FLUSH_INTERVAL = 30_000;
 const BATCH_MAX_SIZE = 20;
+/** A reload within this window resumes the same view instead of counting a new one. */
+const VIEW_SESSION_IDLE_MS = 30 * 60_000;
 
 interface AnalyticsConfig {
   assetId: string;
@@ -30,6 +32,24 @@ function generateSessionId(): string {
   return Array.from(arr, (b) => chars[b % chars.length]).join('');
 }
 
+function viewSessionKey(playbackId: string): string {
+  return `hovod_vs_${playbackId}`;
+}
+
+/** Reuses the viewer's session for this video unless it has been idle too long. */
+function resumeOrCreateSessionId(playbackId: string): string {
+  try {
+    const saved = JSON.parse(localStorage.getItem(viewSessionKey(playbackId)) ?? 'null');
+    if (typeof saved?.id === 'string' && typeof saved.lastSeen === 'number'
+      && Date.now() - saved.lastSeen < VIEW_SESSION_IDLE_MS) {
+      return saved.id;
+    }
+  } catch {
+    // Storage unavailable or corrupt: fall through to a fresh session
+  }
+  return generateSessionId();
+}
+
 export class PlayerAnalytics {
   private sessionId: string;
   private config: AnalyticsConfig;
@@ -38,8 +58,9 @@ export class PlayerAnalytics {
   private flushTimer: number | null = null;
 
   constructor(config: AnalyticsConfig) {
-    this.sessionId = generateSessionId();
+    this.sessionId = resumeOrCreateSessionId(config.playbackId);
     this.config = config;
+    this.touchSession();
     this.flushTimer = window.setInterval(() => this.flush(), BATCH_FLUSH_INTERVAL);
   }
 
@@ -50,6 +71,12 @@ export class PlayerAnalytics {
     let hasStarted = false;
 
     const onPlay = () => {
+      this.startHeartbeat(videoEl, getQualityHeight);
+    };
+
+    // `playing` fires once frames actually render; `play` also fires when
+    // autoplay is blocked or the stream never loads, so it is not a view.
+    const onPlaying = () => {
       if (!hasStarted) {
         hasStarted = true;
         this.enqueue('view_start', {
@@ -58,7 +85,6 @@ export class PlayerAnalytics {
           qualityHeight: getQualityHeight(),
         });
       }
-      this.startHeartbeat(videoEl, getQualityHeight);
     };
 
     const onPause = () => {
@@ -85,6 +111,7 @@ export class PlayerAnalytics {
     };
 
     videoEl.addEventListener('play', onPlay);
+    videoEl.addEventListener('playing', onPlaying);
     videoEl.addEventListener('pause', onPause);
     videoEl.addEventListener('seeked', onSeeked);
     videoEl.addEventListener('ended', onEnded);
@@ -109,6 +136,7 @@ export class PlayerAnalytics {
 
     return () => {
       videoEl.removeEventListener('play', onPlay);
+      videoEl.removeEventListener('playing', onPlaying);
       videoEl.removeEventListener('pause', onPause);
       videoEl.removeEventListener('seeked', onSeeked);
       videoEl.removeEventListener('ended', onEnded);
@@ -136,6 +164,17 @@ export class PlayerAnalytics {
 
   /* ─── Internal ─────────────────────────────────────────── */
 
+  private touchSession() {
+    try {
+      localStorage.setItem(
+        viewSessionKey(this.config.playbackId),
+        JSON.stringify({ id: this.sessionId, lastSeen: Date.now() }),
+      );
+    } catch {
+      // Storage unavailable: the session simply won't survive a reload
+    }
+  }
+
   private enqueue(eventType: string, data: Partial<EventPayload>) {
     this.eventQueue.push({
       sessionId: this.sessionId,
@@ -160,6 +199,7 @@ export class PlayerAnalytics {
     this.stopHeartbeat();
     this.heartbeatTimer = window.setInterval(() => {
       if (!videoEl.paused && !videoEl.ended) {
+        this.touchSession();
         this.enqueue('heartbeat', {
           currentTime: Math.floor(videoEl.currentTime),
           duration: Math.floor(videoEl.duration || 0),

@@ -296,6 +296,7 @@ export function WatchPage() {
                 assetId={data.assetId}
                 playbackId={playbackId}
                 playerType="embed"
+                track={!data.canEdit}
                 subtitlesUrl={data.ai?.subtitlesUrl ? `${data.ai.subtitlesUrl}${vttVersion ? `?v=${vttVersion}` : ''}` : undefined}
                 externalVideoRef={videoRef}
                 commentMarkers={commentMarkers}

@@ -92,7 +92,7 @@ export function ShareModal({ open, onClose, asset, manifest }: ShareModalProps) 
           <div className="relative w-full bg-black rounded-xl overflow-hidden" style={{ aspectRatio: '16/9' }}>
             <iframe
               key={previewQs}
-              src={`/embed/${asset.playbackId}${previewQs}`}
+              src={`/embed/${asset.playbackId}${previewQs ? `${previewQs}&preview=1` : '?preview=1'}`}
               title={t.share.embedPreview}
               className="absolute inset-0 w-full h-full border-0"
               allow="autoplay; fullscreen"

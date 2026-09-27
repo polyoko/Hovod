@@ -26,7 +26,7 @@ async function aggregateHourly() {
       asset_id,
       DATE_FORMAT(created_at, '%Y-%m-%d') as event_date,
       HOUR(created_at) as event_hour,
-      COUNT(CASE WHEN event_type = 'view_start' THEN 1 END) as view_count,
+      COUNT(DISTINCT CASE WHEN event_type = 'view_start' THEN session_id END) as view_count,
       COUNT(DISTINCT session_id) as unique_sessions,
       COUNT(CASE WHEN event_type = 'heartbeat' THEN 1 END) * 10 as watch_time_sec,
       COUNT(CASE WHEN event_type = 'buffer_end' THEN 1 END) as buffer_count,
@@ -34,6 +34,7 @@ async function aggregateHourly() {
       COUNT(CASE WHEN event_type = 'error' THEN 1 END) as error_count
     FROM analytics_events
     WHERE created_at >= ? AND created_at < ?
+      AND COALESCE(player_type, '') <> 'server'
     GROUP BY asset_id, DATE_FORMAT(created_at, '%Y-%m-%d'), HOUR(created_at)`,
     [fromTs, toTs],
   );
@@ -60,7 +61,7 @@ async function aggregateHourly() {
         `SELECT device_type, COUNT(DISTINCT session_id) as cnt
          FROM analytics_events
          WHERE asset_id = ? AND DATE_FORMAT(created_at, '%Y-%m-%d') = ? AND HOUR(created_at) = ?
-           AND device_type IS NOT NULL
+           AND device_type IS NOT NULL AND COALESCE(player_type, '') <> 'server'
          GROUP BY device_type`,
         [row.asset_id, dateStr, hour],
       );
