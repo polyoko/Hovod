@@ -50,7 +50,7 @@
 ## Implementation notes
 - เลือก intro ตามสัดส่วนภาพเหมือน `videotocopy/prepend-intro.sh` (16:9 ใช้ landscape, 9:16 ใช้ portrait, สัดส่วนอื่นใช้ square) แล้ว scale+crop กลางภาพให้เท่าขนาด source, ปรับ fps/sar ให้ตรงกัน แล้วใช้ `concat` filter
 - source ที่ไม่มีเสียงต้องเติม `anullsrc` เพราะ concat ต้องการ audio ทั้งสองฝั่ง จึงต้องขยาย `ffprobe()` ให้คืนค่า `hasAudio` และ `fps`
-- `drawtext`: `enable='gte(t,I)*lt(mod(t-I,10),5)'`, `fontsize=h*0.045`, `y=h*0.04`, สีขาว alpha 0.7 มีขอบดำ font ใช้ `fonts-dejavu-core` (ต้องเพิ่มใน Dockerfile ของ worker)
+- `drawtext`: `enable='gte(t,I)*lt(mod(t-I,10),5)'`, `fontsize=h*0.045`, `y=h*0.04`, สีขาว alpha 0.7 ไม่มีขอบ font ใช้ `fonts-dejavu-core` (ต้องเพิ่มใน Dockerfile ของ worker)
 - `-force_key_frames` ต้องมี keyframe ตรงจุดจบ intro ด้วย player จะได้ seek ไปตรงเนื้อหาแรกได้พอดี
 - hls.js ใช้ `startPosition: introDurationSec` ส่วน Safari native ตั้ง `currentTime` ตอน `loadedmetadata`
 - ต้องคัดลอกไฟล์ intro เข้า worker image หรือ mount เป็น volume

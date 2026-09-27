@@ -92,7 +92,7 @@ export function buildRenditionFilter(
   const offset = intro?.durationSec ?? 0;
   const watermark = branding.watermarkText
     ? `,drawtext=fontfile=${escapeFilterValue(branding.fontFile)}:expansion=none:text=${escapeFilterValue(branding.watermarkText)}`
-      + `:fontsize=h*0.045:fontcolor=white@0.7:borderw=2:bordercolor=black@0.5`
+      + `:fontsize=h*0.045:fontcolor=white@0.7`
       + `:x=(w-text_w)/2:y=h*0.04`
       + `:enable='gte(t,${offset})*lt(mod(t-${offset},${WATERMARK_BLINK_SEC * 2}),${WATERMARK_BLINK_SEC})'`
     : '';
