@@ -73,6 +73,12 @@ function escapeFilterValue(value: string): string {
   return option.replace(/[\\'[\],;]/g, (c) => `\\${c}`);
 }
 
+/** Constant output rate for branded renditions; implausible probe values
+ * (VFR phones can report thousands) fall back to 30. */
+function outputFps(source: ProbeResult): number {
+  return source.fps > 0 && source.fps <= 60 ? Math.round(source.fps * 1000) / 1000 : 30;
+}
+
 /** Build the ffmpeg input and filter arguments for one rendition. Exported so
  * the graph can be checked without running a full transcode. */
 export function buildRenditionFilter(
@@ -97,19 +103,23 @@ export function buildRenditionFilter(
 
   // Concat needs identical canvases: cover-crop the intro to the source frame,
   // and give silent sources an audio track so both segments have one.
+  const fps = outputFps(source);
   const w = Math.floor(source.width / 2) * 2;
   const h = Math.floor(source.height / 2) * 2;
   const audioFormat = 'aformat=sample_rates=48000:channel_layouts=stereo';
   const inputs = ['-i', sourcePath, '-i', intro.path];
-  let sourceAudio = `[0:a]${audioFormat}[sa]`;
+  let sourceAudio = `[0:a]asetpts=PTS-STARTPTS,${audioFormat}[sa]`;
   if (!source.hasAudio) {
     inputs.push('-f', 'lavfi', '-t', String(source.duration), '-i', 'anullsrc=r=48000:cl=stereo');
     sourceAudio = `[2:a]${audioFormat}[sa]`;
   }
   const filter = [
-    `[1:v]scale=${w}:${h}:force_original_aspect_ratio=increase,crop=${w}:${h},setsar=1,fps=${source.fps},format=yuv420p[iv]`,
-    `[1:a]${audioFormat}[ia]`,
-    `[0:v]scale=${w}:${h}:force_original_aspect_ratio=decrease,pad=${w}:${h}:(ow-iw)/2:(oh-ih)/2,setsar=1,format=yuv420p[sv]`,
+    // Both segments are reset to start at 0 and forced to one constant frame
+    // rate; phone sources with a non-zero start or variable frame rate
+    // otherwise make ffmpeg 5.1 duplicate frames without end.
+    `[1:v]setpts=PTS-STARTPTS,scale=${w}:${h}:force_original_aspect_ratio=increase,crop=${w}:${h},setsar=1,fps=${fps},format=yuv420p[iv]`,
+    `[1:a]asetpts=PTS-STARTPTS,${audioFormat}[ia]`,
+    `[0:v]setpts=PTS-STARTPTS,scale=${w}:${h}:force_original_aspect_ratio=decrease,pad=${w}:${h}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=${fps},format=yuv420p[sv]`,
     sourceAudio,
     `[iv][ia][sv][sa]concat=n=2:v=1:a=1[cv][ca]`,
     `[cv]${scale}${watermark}[v]`,
@@ -148,6 +158,11 @@ export async function transcodeRendition(
     '-filter_complex', graph.filter,
     '-map', graph.video,
     '-map', graph.audio,
+    // Hard stop for the branded graph: a timestamp problem can never turn into
+    // an endless encode. Plain output keeps ffmpeg's own frame handling.
+    ...(branding.intro
+      ? ['-frames:v', String(Math.ceil((offset + source.duration + 2) * outputFps(source)))]
+      : []),
     '-c:v', 'libx264',
     '-preset', 'fast',
     '-crf', '23',
