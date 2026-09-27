@@ -7,6 +7,7 @@ import {
   ID_LENGTH,
 } from '@hovod/db';
 import { db, pool } from '../db.js';
+import { computeWatchIncrements, watchKey, type PriorWatch } from './watch-time.js';
 
 /* ─── Helpers ──────────────────────────────────────────────── */
 
@@ -54,6 +55,30 @@ interface EventPayload {
   errorMessage?: string;
   playerType?: string;
   referrer?: string;
+  playedMs?: number;
+}
+
+async function loadPriorWatch(events: EventPayload[]): Promise<Map<string, PriorWatch>> {
+  const sessionIds = [...new Set(events.filter((e) => e.playedMs !== undefined).map((e) => e.sessionId))];
+  const prior = new Map<string, PriorWatch>();
+  if (sessionIds.length === 0) return prior;
+  // Elapsed time is computed by MySQL so it shares created_at's clock and time zone.
+  const rows = await rawQuery(
+    `SELECT session_id, asset_id,
+      COALESCE(MAX(played_ms), 0) as max_played_ms,
+      TIMESTAMPDIFF(SECOND, MAX(created_at), NOW()) as idle_sec
+    FROM analytics_events
+    WHERE session_id IN (${sessionIds.map(() => '?').join(', ')})
+    GROUP BY session_id, asset_id`,
+    sessionIds,
+  );
+  for (const r of rows) {
+    prior.set(watchKey(String(r.session_id), String(r.asset_id)), {
+      maxPlayedMs: Number(r.max_played_ms),
+      idleMs: Math.max(0, Number(r.idle_sec)) * 1000,
+    });
+  }
+  return prior;
 }
 
 export async function insertAnalyticsEvents(
@@ -64,7 +89,11 @@ export async function insertAnalyticsEvents(
   const deviceType = parseDeviceType(userAgent);
   const country = parseCountryHint(acceptLanguage);
 
-  const rows = events.map((e) => ({
+  // ponytail: read-max-then-insert isn't atomic; two concurrent batches of one
+  // session can each claim the same increment. Rare (batches are ≥10s apart).
+  const watchMs = computeWatchIncrements(events, await loadPriorWatch(events));
+
+  const rows = events.map((e, i) => ({
     id: nanoid(ID_LENGTH.ANALYTICS_EVENT),
     sessionId: e.sessionId,
     assetId: e.assetId,
@@ -80,6 +109,8 @@ export async function insertAnalyticsEvents(
     deviceType,
     referrer: e.referrer ?? null,
     playerType: e.playerType ?? null,
+    playedMs: e.playedMs ?? null,
+    watchMs: watchMs[i],
   }));
 
   await db.insert(analyticsEvents).values(rows);
@@ -92,6 +123,13 @@ export async function insertAnalyticsEvents(
  */
 const REAL_PLAYER = "COALESCE(player_type, '') <> 'server'";
 const REAL_PLAYER_E = "COALESCE(e.player_type, '') <> 'server'";
+
+/**
+ * Watch time: summed `watch_ms` increments, plus 10s per heartbeat from older
+ * players that don't report `played_ms`.
+ */
+const WATCH_SEC = "(COALESCE(watch_ms, 0) / 1000 + CASE WHEN event_type = 'heartbeat' AND played_ms IS NULL THEN 10 ELSE 0 END)";
+const WATCH_SEC_E = "(COALESCE(e.watch_ms, 0) / 1000 + CASE WHEN e.event_type = 'heartbeat' AND e.played_ms IS NULL THEN 10 ELSE 0 END)";
 
 /**
  * JSON columns can arrive as raw strings (see routes/assets.ts metadata), and a
@@ -124,7 +162,7 @@ export async function getAssetAnalytics(assetId: string, period: string) {
     `SELECT
       COUNT(DISTINCT CASE WHEN event_type = 'view_start' THEN session_id END) as total_views,
       COUNT(DISTINCT session_id) as total_unique_sessions,
-      COALESCE(SUM(CASE WHEN event_type = 'heartbeat' THEN 10 ELSE 0 END), 0) as total_watch_time_sec
+      ROUND(COALESCE(SUM(${WATCH_SEC}), 0)) as total_watch_time_sec
     FROM analytics_events
     WHERE asset_id = ? AND created_at >= ? AND ${REAL_PLAYER}`,
     [assetId, dateCutoff],
@@ -136,7 +174,7 @@ export async function getAssetAnalytics(assetId: string, period: string) {
     `SELECT
       DATE_FORMAT(created_at, '%Y-%m-%d') as date,
       COUNT(DISTINCT CASE WHEN event_type = 'view_start' THEN session_id END) as views,
-      SUM(CASE WHEN event_type = 'heartbeat' THEN 10 ELSE 0 END) as watch_time_sec,
+      ROUND(SUM(${WATCH_SEC})) as watch_time_sec,
       COUNT(DISTINCT session_id) as unique_sessions
     FROM analytics_events
     WHERE asset_id = ? AND created_at >= ? AND ${REAL_PLAYER}
@@ -198,7 +236,7 @@ export async function getOverviewAnalytics(period: string, orgId: string) {
   const summaryRows = await rawQuery(
     `SELECT
       COUNT(DISTINCT CASE WHEN e.event_type = 'view_start' THEN e.session_id END) as total_views,
-      COALESCE(SUM(CASE WHEN e.event_type = 'heartbeat' THEN 10 ELSE 0 END), 0) as total_watch_time_sec
+      ROUND(COALESCE(SUM(${WATCH_SEC_E}), 0)) as total_watch_time_sec
     FROM analytics_events e
     INNER JOIN assets a ON a.id = e.asset_id
     WHERE a.org_id = ? AND e.created_at >= ? AND ${REAL_PLAYER_E}`,
@@ -228,7 +266,7 @@ export async function getOverviewAnalytics(period: string, orgId: string) {
     `SELECT
       DATE_FORMAT(e.created_at, '%Y-%m-%d') as date,
       COUNT(DISTINCT CASE WHEN e.event_type = 'view_start' THEN e.session_id END) as views,
-      SUM(CASE WHEN e.event_type = 'heartbeat' THEN 10 ELSE 0 END) as watch_time_sec,
+      ROUND(SUM(${WATCH_SEC_E})) as watch_time_sec,
       COUNT(DISTINCT e.session_id) as unique_sessions
     FROM analytics_events e
     INNER JOIN assets a ON a.id = e.asset_id

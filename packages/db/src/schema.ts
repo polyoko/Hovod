@@ -146,6 +146,10 @@ export const analyticsEvents = mysqlTable('analytics_events', {
   deviceType: varchar('device_type', { length: 16 }),
   referrer: varchar('referrer', { length: 2048 }),
   playerType: varchar('player_type', { length: 16 }),
+  /** Client's cumulative wall-clock playing time for the session. */
+  playedMs: int('played_ms'),
+  /** Increment over the session's previous max, clamped at ingest; summed for watch time. */
+  watchMs: int('watch_ms'),
   createdAt: timestamp('created_at').notNull().defaultNow(),
 }, (table) => ({
   assetIdIdx: index('idx_analytics_events_asset_id').on(table.assetId),

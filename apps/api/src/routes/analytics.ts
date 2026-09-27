@@ -29,6 +29,8 @@ const eventSchema = z.object({
   bufferDurationMs: z.number().int().nonnegative().optional(),
   errorMessage: z.string().max(512).optional(),
   playerType: z.enum(['embed', 'dashboard', 'web']).optional(),
+  /** Cumulative playing time for the session; capped so one value can't fail the INT insert. */
+  playedMs: z.number().int().nonnegative().max(2_147_483_647).optional(),
   referrer: z.string().max(2048).optional(),
   timestamp: z.number().optional(),
 });

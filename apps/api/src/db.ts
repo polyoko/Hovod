@@ -146,6 +146,8 @@ export async function runMigrations() {
       device_type VARCHAR(16) NULL,
       referrer VARCHAR(2048) NULL,
       player_type VARCHAR(16) NULL,
+      played_ms INT NULL,
+      watch_ms INT NULL,
       created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
       INDEX idx_ae_asset_id (asset_id),
       INDEX idx_ae_session_id (session_id),
@@ -154,6 +156,14 @@ export async function runMigrations() {
       INDEX idx_ae_asset_event (asset_id, event_type, created_at)
     )
   `);
+
+  // Watch time from the player's cumulative playing clock (see services/analytics.ts)
+  await pool.query(`
+    ALTER TABLE analytics_events ADD COLUMN played_ms INT NULL AFTER player_type
+  `).catch(() => { /* column already exists */ });
+  await pool.query(`
+    ALTER TABLE analytics_events ADD COLUMN watch_ms INT NULL AFTER played_ms
+  `).catch(() => { /* column already exists */ });
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS analytics_daily (

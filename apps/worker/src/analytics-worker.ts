@@ -28,7 +28,8 @@ async function aggregateHourly() {
       HOUR(created_at) as event_hour,
       COUNT(DISTINCT CASE WHEN event_type = 'view_start' THEN session_id END) as view_count,
       COUNT(DISTINCT session_id) as unique_sessions,
-      COUNT(CASE WHEN event_type = 'heartbeat' THEN 1 END) * 10 as watch_time_sec,
+      -- Same formula as WATCH_SEC in apps/api/src/services/analytics.ts
+      ROUND(SUM(COALESCE(watch_ms, 0) / 1000 + CASE WHEN event_type = 'heartbeat' AND played_ms IS NULL THEN 10 ELSE 0 END)) as watch_time_sec,
       COUNT(CASE WHEN event_type = 'buffer_end' THEN 1 END) as buffer_count,
       COALESCE(SUM(CASE WHEN event_type = 'buffer_end' THEN buffer_duration_ms ELSE 0 END), 0) as total_buffer_ms,
       COUNT(CASE WHEN event_type = 'error' THEN 1 END) as error_count
